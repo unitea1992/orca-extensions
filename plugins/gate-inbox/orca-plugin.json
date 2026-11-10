@@ -1,0 +1,48 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "gate-inbox",
+  "name": "確認待ち",
+  "version": "0.1.0",
+  "description": "Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行をまとめてコピーできるようにする。",
+  "license": "MIT",
+  "engines": { "orca": ">=1.4.248" },
+  "main": "worker/main.mjs",
+  "pluginApi": 1,
+  "capabilities": [{ "kind": "settings:own" }, { "kind": "storage:own" }],
+  "contributes": {
+    "panels": [
+      {
+        "id": "inbox",
+        "title": "確認待ち",
+        "icon": "bell",
+        "entry": "panel/index.html",
+        "ui": "html"
+      }
+    ],
+    "settings": [
+      {
+        "key": "environment",
+        "title": "Orca サーバー",
+        "description": "ゲートを読むペアリング先の名前か id。空なら保存済みの最初の環境を使う。",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "runId",
+        "title": "Run",
+        "description": "この Run の確認待ちだけを表示する。空なら pending のある全 Run を並べる。",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "refreshSeconds",
+        "title": "更新間隔（秒）",
+        "type": "integer",
+        "default": 20,
+        "minimum": 5,
+        "maximum": 600
+      }
+    ]
+  }
+}

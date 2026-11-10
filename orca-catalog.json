@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
+  "catalogVersion": 2,
+  "name": "unitea1992 Orca Extensions",
+  "owner": "unitea1992",
+  "plugins": []
+}
