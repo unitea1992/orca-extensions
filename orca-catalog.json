@@ -12,11 +12,33 @@
         "ref": "main",
         "path": "plugins/gate-inbox"
       },
-      "description": "Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする。",
+      "description": "Gate Inbox: Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする。",
       "categories": [
         "productivity"
       ],
       "releases": [
+        {
+          "version": "0.1.1",
+          "commit": "7794bea682844181430097ecd51107b60f1ff43c",
+          "contentHash": "d0e27de81a905497c9e5e2f26788ed3464bba6f0a2e095597870d7bb9881cdae",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Gate Inbox",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Gate Inbox"
+            }
+          ],
+          "capabilities": [
+            "settings:own",
+            "storage:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-10",
+          "changelog": "プラグイン名とタブ名を Gate Inbox に統一した。表示名のみの変更で、id・アクセス権・設定キーは変わらない。"
+        },
         {
           "version": "0.1.0",
           "commit": "0f8014786713801aecffc6479b05ecbe5105a425",
