@@ -3,5 +3,43 @@
   "catalogVersion": 2,
   "name": "unitea1992 Orca Extensions",
   "owner": "unitea1992",
-  "plugins": []
+  "plugins": [
+    {
+      "id": "unitea1992.gate-inbox",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/unitea1992/orca-extensions.git",
+        "ref": "main",
+        "path": "plugins/gate-inbox"
+      },
+      "description": "Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする。",
+      "categories": [
+        "productivity"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "0f8014786713801aecffc6479b05ecbe5105a425",
+          "contentHash": "af149714c4e88c2fb00c82adb9a0fe507569000cfd0ffc6afdbb59266e44d399",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "確認待ち",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "確認待ち"
+            }
+          ],
+          "capabilities": [
+            "settings:own",
+            "storage:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-10",
+          "changelog": "最初のリリース。Run ごとの確認待ち一覧（折りたたみ可）、番号＋一言の回答行のコピー、未回答のみの絞り込み、相対時刻。"
+        }
+      ]
+    }
+  ]
 }
