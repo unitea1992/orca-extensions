@@ -1,4 +1,4 @@
-# 確認待ち（gate-inbox）
+# Gate Inbox（gate-inbox）
 
 Orca の**決定ゲート**（`orca orchestration gate-create` で積まれる確認待ち）を、右サイドバーに一覧で出すプラグインです。回答は番号＋一言の1行にまとめてコピーでき、コーディネーターのチャットに貼って返せます。
 
@@ -26,7 +26,7 @@ state env=kthin-dev run=run_e1175e3cfd2b runs=30 gates=2
 
 ## 使い方
 
-1. 右サイドバーのアクティビティバーから **確認待ち** を開く
+1. 右サイドバーのアクティビティバーから **Gate Inbox** を開く
 2. pending のある Run が全部並ぶ（Run ごとに見出し・件数・コピーボタン）。Run の見出しをクリックすると折りたためる
 3. カードは畳まれた状態で並ぶ。見出しと `決めること:` の1行、回答済みなら `回答: …` の行まで見える
 4. 答えるカードの見出しをクリックして開き、選択肢を押す／自由入力して「回答」
@@ -60,7 +60,7 @@ orca orchestration gate-create --task <id> \
 
 ## 設定
 
-Settings → Plugins → 確認待ち
+Settings → Plugins → Gate Inbox
 
 | key | 意味 | 既定 |
 |---|---|---|

@@ -6,7 +6,7 @@ Orca の任意プラグインをまとめるカタログです。Orca 本体や�
 
 | プラグイン | 概要 | 前提 |
 | --- | --- | --- |
-| [`gate-inbox`](plugins/gate-inbox/README.md) | orchestration の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする | コーディネーターが orchestration の Run を持ち、`gate-create` で確認事項を積んでいること |
+| [`gate-inbox`](plugins/gate-inbox/README.md) | Gate Inbox: orchestration の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする | コーディネーターが orchestration の Run を持ち、`gate-create` で確認事項を積んでいること |
 
 各プラグインは独立して導入・更新できます。
 
