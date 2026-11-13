@@ -7,11 +7,9 @@
 // comes from `orca worktree ps --environment`, the same way gate-inbox reads a paired
 // server.
 //
-// The plugin contributes a status bar item, so Orca keeps this worker running while
-// the plugin is enabled. The worker is the only poller: it updates the status bar and
-// posts to open panels when something changed. It reads the server only while there
-// is something on screen to keep current: always with the status bar item shown, and
-// with `displayMode: panel` only while a panel is open. Otherwise no timer runs.
+// The worker reads only when a panel asks, and a panel asks only while it is visible.
+// Nothing is scheduled here and nothing runs in the background: with no panel open
+// there is no SSH session and no timer.
 
 import { exec, execFile, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -29,11 +27,9 @@ const TERMINALS_TTL_MS = 60_000
 export const SENTINEL = 'AGENT_METER_RESULT '
 const NODE_MISSING = 'AGENT_METER_NODE_NOT_FOUND'
 
-export const PERIOD_LABELS = { '15m': '直近15分', '1h': '直近1時間', '24h': '直近24時間' }
+const PERIODS = ['15m', '1h', '24h']
 const AGENT_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi', opencode: 'OpenCode', dsh: 'DSH' }
 const AGENT_ORDER = ['claude', 'codex', 'pi', 'opencode', 'dsh']
-export const WARN_PERCENT = 70
-export const DANGER_PERCENT = 90
 
 function fail(code, message) {
   const error = new Error(message)
@@ -677,14 +673,7 @@ export function terminalHandles(listed) {
 }
 
 // ---------------------------------------------------------------------------
-// Snapshot: what the panel and the status bar show
-
-function median(values) {
-  if (values.length === 0) return null
-  const sorted = [...values].sort((left, right) => left - right)
-  const middle = sorted.length >> 1
-  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
-}
+// Snapshot: what the panel shows
 
 function order(agent) {
   const index = AGENT_ORDER.indexOf(agent)
@@ -763,90 +752,10 @@ export function buildGroups(reader, agents = [], handles = new Map()) {
   )
 }
 
-/** The two figures of the status bar: the median over the models that produced output
- *  in the period, and the fullest context among live agents. */
-export function summarize(groups) {
-  const speeds = groups.map((group) => group.tokPerSec).filter((value) => typeof value === 'number')
-  const fullest = groups
-    .flatMap((group) => group.rows)
-    .filter((row) => row.percent !== null)
-    .map((row) => ({ percent: row.percent, name: row.sub ? `${row.name} ${row.sub}` : row.name }))
-    .sort((left, right) => right.percent - left.percent)
-  return { tokPerSec: median(speeds), fullest }
-}
-
-/** Status bar text and tooltips are one line with a length limit. */
-function oneLine(text, max) {
-  const flat = String(text).replace(/\s+/g, ' ').trim()
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
-}
-
-function shortModel(model) {
-  return String(model).replace(/^claude-/, '')
-}
-
-/** The ids of `contributes.statusBarItems`. */
-export const STATUS_ITEMS = ['speed', 'context']
-
-/**
- * The two status bar items. Orca gives an item one colour, so the speed and the context
- * are separate items: a full context must not paint the speed red.
- *
- * - `speed`: the median tokens per second. Neutral; a warning only when the read failed.
- * - `context`: the fullest context among live agents, amber from 70% and red from 90%,
- *   with the fullest agents in its tooltip. Hidden while there is no percentage to show.
- */
-export function statusBarItems(snapshot) {
-  const hidden = { visible: false }
-  if (!snapshot.configured) {
-    return {
-      speed: { text: '⚡ 未設定', tone: 'neutral', tooltip: 'Agent Meter: 設定で SSH 接続先を入れてください', visible: true },
-      context: hidden
-    }
-  }
-  const { tokPerSec, fullest } = summarize(snapshot.groups)
-  const speedLines = snapshot.groups
-    .filter((group) => group.tokPerSec !== null)
-    .map(
-      (group) =>
-        `${AGENT_LABELS[group.agent] ?? group.agent} ${shortModel(group.model)} ` +
-        `${group.estimated ? '≈' : ''}${Math.round(group.tokPerSec)} tok/s`
-    )
-  const speed = snapshot.error
-    ? { text: '⚡ 取得失敗', tone: 'warning', tooltip: oneLine(`Agent Meter: ${snapshot.error.message}`, 256) }
-    : {
-        text: tokPerSec === null ? '⚡ —' : `⚡ ${Math.round(tokPerSec)} tok/s`,
-        tone: 'neutral',
-        tooltip: oneLine(
-          `Agent Meter 出力速度（${PERIOD_LABELS[snapshot.period] ?? snapshot.period}）: ${speedLines.join(' / ') || 'データなし'}`,
-          256
-        )
-      }
-  if (fullest.length === 0) return { speed: { ...speed, visible: true }, context: hidden }
-  const percent = fullest[0].percent
-  const agents = fullest.slice(0, 6).map((entry) => `${entry.name} ${Math.round(entry.percent)}%`)
-  return {
-    speed: { ...speed, visible: true },
-    context: {
-      text: `◔ ${Math.round(percent)}%`,
-      tone: percent >= DANGER_PERCENT ? 'danger' : percent >= WARN_PERCENT ? 'warning' : 'neutral',
-      // After a failed read these are the figures of the last good one.
-      tooltip: oneLine(`Agent Meter コンテキスト${snapshot.error ? '（前回の値）' : ''}: ${agents.join(' / ')}`, 256),
-      visible: true
-    }
-  }
-}
-
-/** What the panel compares to decide whether anything changed: everything but the clock. */
-export function contentKey(snapshot) {
-  return JSON.stringify({ ...snapshot, fetchedAt: 0 })
-}
-
 // ---------------------------------------------------------------------------
-// Polling
+// Reading on request
 
 export const DEFAULTS = {
-  displayMode: 'statusbar',
   sshTarget: '',
   identityFile: '',
   remoteNode: '',
@@ -855,136 +764,31 @@ export const DEFAULTS = {
   refreshSeconds: 15
 }
 
-/** The settings as last read, kept for when Orca refuses to hand them out. */
-let knownSettings = {}
-
-async function readSettings(orca) {
-  const settings = { ...DEFAULTS, ...knownSettings }
-  let refused = false
-  for (const key of Object.keys(DEFAULTS)) {
-    try {
-      const value = await orca.settings.get(key)
-      settings[key] = value !== undefined && value !== null ? value : DEFAULTS[key]
-      knownSettings[key] = settings[key]
-    } catch (error) {
-      // Keep what was last read, else the default.
-      if (isConsentError(error)) refused = true
-    }
-  }
-  noteConsent(orca, 'settings', refused)
-  settings.sshTarget = String(settings.sshTarget).trim()
-  settings.environment = String(settings.environment).trim()
-  if (!Object.hasOwn(PERIOD_LABELS, settings.period)) settings.period = DEFAULTS.period
-  settings.refreshSeconds = Math.min(600, Math.max(5, Number(settings.refreshSeconds) || DEFAULTS.refreshSeconds))
-  return settings
-}
-
-/** The worker `activate` started; work that outlives `deactivate` must not publish. */
-let active = null
-let timer = null
-let pollMs = DEFAULTS.refreshSeconds * 1000
-/** The one refresh in flight. */
-let building = null
-/** A setting changed while a refresh was in flight: its result is already stale. */
-let dirty = false
-/** Per status bar item, the update last sent, so an unchanged one is not sent again. */
-let lastStatusKeys = {}
-/** The snapshot last published. */
-let last = null
-let lastKey = ''
-let lastLogLine = ''
-/** The failed ssh run last written to the log, so a failure that repeats is logged once. */
-let lastRunKey = ''
-/** When a panel last asked; 0 once it said it was hidden. */
-let panelSeenAt = 0
-/** Panel-only mode with no panel open: no timer runs until a panel asks again. */
-let paused = false
-let environment = { arg: 'local', label: 'local' }
-let terminals = { at: 0, environment: '', handles: new Map(), titles: new Map() }
-
-function hostHas(orca, method, sinceMinor) {
-  if (typeof orca.host?.has === 'function') return orca.host.has(method)
-  return orca.api.major > 1 || orca.api.minor >= sinceMinor
-}
-
 /** Orca refusing a call because the plugin's approval no longer matches its code or
  *  capabilities, as after a development reload that changed them. */
 export function isConsentError(error) {
   return error?.code === 'consent_required' || /not enabled with current consent/i.test(String(error?.message ?? ''))
 }
 
-/** Which kinds of call Orca is refusing for want of approval. */
-const refusedBy = { statusBar: false, settings: false, post: false }
-let lastStatusError = ''
-
-function consentRequired() {
-  return refusedBy.statusBar || refusedBy.settings || refusedBy.post
-}
-
-/**
- * Records whether one kind of call was refused. Refusals repeat on every refresh until
- * the person approves again, so the log gets one line when they start and one when they
- * stop, and the panel is told so it can say what to do.
- */
-function noteConsent(orca, source, refused) {
-  if (active !== orca) return
-  const before = consentRequired()
-  refusedBy[source] = refused
-  const now = consentRequired()
-  if (now === before) return
-  orca.log(
-    now
-      ? 'consent_required: Orca がこのプラグインを現在の承認で有効にしていません。承認をやり直してください（解消するまでこの行は繰り返しません）'
-      : 'consent: 承認が戻りました'
-  )
-  if (!last) return
-  last = { ...last, consentRequired: now }
-  lastKey = contentKey(last)
-  post(orca, 'snapshot', last)
-}
-
-/** Sends to open panels. A refusal is recorded, never thrown or logged over and over. */
-function post(orca, name, data) {
-  const failed = (error) => {
-    if (isConsentError(error)) noteConsent(orca, 'post', true)
-    else logOnce(orca, `post ERR ${error?.message ?? error}`)
-  }
-  try {
-    const sent = orca.panels.post(name, data)
-    if (sent && typeof sent.then === 'function') sent.then(() => noteConsent(orca, 'post', false), failed)
-    else noteConsent(orca, 'post', false)
-  } catch (error) {
-    failed(error)
-  }
-}
-
-function updateStatusBar(orca, id, patch) {
-  if (!hostHas(orca, 'statusBar.update', 2)) return
-  const key = JSON.stringify(patch)
-  if (key === lastStatusKeys[id]) return
-  lastStatusKeys[id] = key
-  orca.host.call('statusBar.update', { id, ...patch }).then(
-    () => {
-      lastStatusError = ''
-      noteConsent(orca, 'statusBar', false)
-    },
-    (error) => {
-      // Tried again on the next refresh, so it recovers by itself once the cause is gone.
-      delete lastStatusKeys[id]
-      if (isConsentError(error)) {
-        noteConsent(orca, 'statusBar', true)
-        return
-      }
-      const line = `statusBar.update ERR ${error.code ?? '-'} ${error.message}`
-      if (line === lastStatusError) return
-      lastStatusError = line
-      orca.log(line)
-    }
-  )
-}
+/** The worker `activate` started; work that outlives `deactivate` must not keep state. */
+let active = null
+/** The one read in flight. */
+let building = null
+/** The snapshot last built, and when. */
+let last = null
+let builtAt = 0
+let lastLogLine = ''
+/** The failed ssh run last written to the log, so a failure that repeats is logged once. */
+let lastRunKey = ''
+/** The settings as last read, kept for when Orca refuses to hand them out. */
+let knownSettings = {}
+/** Orca is refusing the settings for want of approval. */
+let consentRefused = false
+let environment = { arg: 'local', label: 'local' }
+let terminals = { at: 0, environment: '', handles: new Map(), titles: new Map() }
 
 function logOnce(orca, line) {
-  // The worker polls all day; only say what changed.
+  // A panel asks every few seconds while it is open; only say what changed.
   if (line === lastLogLine) return
   lastLogLine = line
   orca.log(line)
@@ -1000,28 +804,34 @@ function logRun(orca, run) {
   for (const line of lines) orca.log(line)
 }
 
-/** Updates both status bar items; with `shown` false (panel-only mode) both are hidden. */
-function showStatusBar(orca, snapshot, shown) {
-  const items = shown && snapshot ? statusBarItems(snapshot) : {}
-  for (const id of STATUS_ITEMS) {
-    // Every field goes out each time: an omitted one would keep its old value.
-    updateStatusBar(orca, id, items[id] ?? { visible: false })
+async function readSettings(orca) {
+  const settings = { ...DEFAULTS, ...knownSettings }
+  let refused = false
+  for (const key of Object.keys(DEFAULTS)) {
+    try {
+      const value = await orca.settings.get(key)
+      settings[key] = value !== undefined && value !== null ? value : DEFAULTS[key]
+      knownSettings[key] = settings[key]
+    } catch (error) {
+      // Keep what was last read, else the default.
+      if (isConsentError(error)) refused = true
+    }
   }
-}
-
-function publish(orca, built, settings) {
-  if (active !== orca) return
-  const snapshot = { ...built, consentRequired: consentRequired() }
-  last = snapshot
-  showStatusBar(orca, snapshot, settings.displayMode !== 'panel')
-  const key = contentKey(snapshot)
-  if (key !== lastKey) {
-    lastKey = key
-    post(orca, 'snapshot', snapshot)
-  } else {
-    // Nothing changed; the panel only needs to know the read happened.
-    post(orca, 'tick', { fetchedAt: snapshot.fetchedAt })
+  // The refusal repeats on every read until the person approves again, so the log gets
+  // one line when it starts and one when it ends; the panel says what to do.
+  if (refused !== consentRefused) {
+    consentRefused = refused
+    orca.log(
+      refused
+        ? 'consent_required: Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください（解消するまでこの行は繰り返しません）'
+        : 'consent: 承認が戻りました'
+    )
   }
+  settings.sshTarget = String(settings.sshTarget).trim()
+  settings.environment = String(settings.environment).trim()
+  if (!PERIODS.includes(settings.period)) settings.period = DEFAULTS.period
+  settings.refreshSeconds = Math.min(600, Math.max(5, Number(settings.refreshSeconds) || DEFAULTS.refreshSeconds))
+  return settings
 }
 
 /** → `{ handles, titles }` of the server's terminals, by pane key. */
@@ -1046,6 +856,7 @@ async function build(orca, settings) {
     fetchedAt: Date.now(),
     error: null,
     notice: null,
+    consentRequired: consentRefused,
     groups: []
   }
   if (!base.configured) return base
@@ -1094,71 +905,34 @@ async function build(orca, settings) {
   }
 }
 
-/** Every reader (the timer, a panel, a settings change) goes through here, so there is
- *  never more than one SSH session open. */
-function refresh(orca) {
+/** Reads the server once. Callers that arrive while a read is in flight share it, so
+ *  there is never more than one SSH session open. */
+function read(orca) {
   building ??= (async () => {
     try {
-      do {
-        dirty = false
-        const settings = await readSettings(orca)
-        pollMs = settings.refreshSeconds * 1000
-        const snapshot = await build(orca, settings)
-        if (!dirty) publish(orca, snapshot, settings)
-      } while (dirty && active === orca)
+      const snapshot = await build(orca, await readSettings(orca))
+      if (active === orca) {
+        last = snapshot
+        builtAt = Date.now()
+      }
+      return snapshot
     } finally {
       building = null
     }
-    return last
   })()
   return building
 }
 
 /**
- * A visible panel asks again every 20 s (HEARTBEAT_MS in panel/index.html) and says
- * when it is hidden. A frame that goes away without saying so is noticed here: two
- * missed beats mean it is closed.
+ * What a panel gets when it asks. A visible panel asks once per refresh interval and
+ * every ask is a read; an answer younger than half an interval is reused, so two open
+ * panels do not double the reads. `force` (a setting changed) always reads again, after
+ * any read that started before the change.
  */
-export const PANEL_ALIVE_MS = 50_000
-
-/** Whether anything on screen needs the server read: the status bar item always does,
- *  a panel only while it is open. */
-export function shouldPoll(displayMode, seenAt, now) {
-  return displayMode !== 'panel' || now - seenAt < PANEL_ALIVE_MS
-}
-
-function schedule(orca) {
-  clearTimeout(timer)
-  if (active !== orca || paused) return
-  timer = setTimeout(() => void tick(orca), pollMs)
-}
-
-async function tick(orca) {
-  try {
-    const settings = await readSettings(orca)
-    pollMs = settings.refreshSeconds * 1000
-    if (shouldPoll(settings.displayMode, panelSeenAt, Date.now())) {
-      paused = false
-      await refresh(orca)
-    } else {
-      // Panel-only mode with no panel open: nothing is on screen, so nothing is read
-      // and no timer is left running. A panel that opens, or a setting, starts it again.
-      paused = true
-      showStatusBar(orca, null, false)
-    }
-  } catch (error) {
-    orca.log(`tick ERR ${error.message}`)
-  }
-  schedule(orca)
-}
-
-/** A panel is on screen: make sure the server is being read. */
-function panelSeen(orca) {
-  panelSeenAt = Date.now()
-  if (!paused) return
-  paused = false
-  clearTimeout(timer)
-  void tick(orca)
+export function snapshotFor(orca, force = false) {
+  if (building) return force ? building.then(() => read(orca), () => read(orca)) : building
+  if (!force && last && Date.now() - builtAt < (last.refreshSeconds * 1000) / 2) return last
+  return read(orca)
 }
 
 async function focusAgent(id) {
@@ -1174,53 +948,23 @@ export default function activate(orca) {
   )
   active = orca
   building = null
-  dirty = false
   last = null
-  lastKey = ''
-  lastStatusKeys = {}
-  lastStatusError = ''
+  builtAt = 0
   lastLogLine = ''
   lastRunKey = ''
   knownSettings = {}
-  refusedBy.statusBar = refusedBy.settings = refusedBy.post = false
-  panelSeenAt = 0
-  paused = false
+  consentRefused = false
 
-  // A panel asks when it opens and while it stays visible. It gets what is already
-  // known at once; a stale answer is followed by a post when the read finishes.
-  orca.panels.handle('snapshot.get', async () => {
-    panelSeen(orca)
-    if (!last) return refresh(orca)
-    if (Date.now() - last.fetchedAt > 2 * pollMs) void refresh(orca)
-    return last
-  })
-  // Best effort: a frame that is torn down may not get to say so, which the missed
-  // heartbeats cover. With several panels open, the next beat of another one resumes.
-  orca.panels.handle('panel.hidden', () => {
-    panelSeenAt = 0
-    return { ok: true }
-  })
+  // Nothing is scheduled here. A panel asks while it is visible, and each ask is
+  // answered with a read; with no panel open the worker does nothing at all.
+  orca.panels.handle('snapshot.get', async (input) => snapshotFor(orca, input?.force === true))
   orca.panels.handle('agent.focus', (input) => focusAgent(input?.id))
   // Also reachable without the panel: `orca plugin dev request <folder> connection.test`.
   orca.panels.handle('connection.test', async () => testConnection(orca, await readSettings(orca)))
-
-  if (typeof orca.settings.onDidChange === 'function') {
-    orca.settings.onDidChange(() => {
-      if (active !== orca) return
-      dirty = true
-      clearTimeout(timer)
-      void tick(orca)
-    })
-  }
-
-  void tick(orca)
 }
 
 export function deactivate() {
   active = null
-  paused = false
-  clearTimeout(timer)
-  timer = null
   for (const child of children) killTree(child)
   children.clear()
 }

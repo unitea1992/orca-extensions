@@ -64,13 +64,14 @@
       .where {
         flex: 0 1 auto;
         min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
         color: var(--quiet);
         font-size: 11px;
-        font-variant-numeric: tabular-nums;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
+      .where span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .where .stale { font-size: 10px; }
       .banner {
         margin: 8px 8px 0;
         padding: 6px 8px;
@@ -174,7 +175,7 @@
       <span class="where" id="where"></span>
     </div>
     <div class="banner error" id="consent" hidden>
-      <div>Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください（開発フォルダなら orca plugin dev watch をやり直す）。それまでステータスバーは更新されません。</div>
+      <div>Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください（開発フォルダなら orca plugin dev watch をやり直す）。それまで設定の変更が反映されません。</div>
     </div>
     <div class="banner error" id="error" hidden>
       <div id="errorText"></div>
@@ -190,10 +191,6 @@
       const PERIOD_LABELS = { '15m': '直近15分', '1h': '直近1時間', '24h': '直近24時間' }
       const WARN_PERCENT = 70
       const DANGER_PERCENT = 90
-      /** While visible the panel asks again this often, which also tells the worker a
-       *  panel is open: in panel-only mode it reads the server only then. The worker
-       *  takes two missed beats as closed (PANEL_ALIVE_MS in worker/main.mjs). */
-      const HEARTBEAT_MS = 20_000
 
       const el = {
         where: document.getElementById('where'),
@@ -235,15 +232,18 @@
         return `${Math.floor(seconds / 3600)}時間前`
       }
 
-      /** The header's right side: what the person configured, and how old the figures are. */
-      function renderAge() {
-        if (!snapshot || !snapshot.configured) {
-          el.where.textContent = ''
-          return
-        }
-        const parts = [snapshot.label, snapshot.fetchedAt ? ageText(snapshot.fetchedAt) : ''].filter(Boolean)
-        el.where.textContent = parts.join(' · ')
+      /**
+       * The header's right side: the target as configured. The age of the figures is
+       * said only when it means something: when the last good read is three refresh
+       * intervals old. Called when an answer arrives, so no clock has to tick for it.
+       */
+      function renderWhere() {
+        el.where.replaceChildren()
+        if (!snapshot || !snapshot.configured) return
         el.where.title = snapshot.label || ''
+        if (snapshot.label) el.where.append(node('span', 'label', snapshot.label))
+        const stalled = snapshot.fetchedAt > 0 && Date.now() - snapshot.fetchedAt >= 3 * snapshot.refreshSeconds * 1000
+        if (stalled) el.where.append(node('span', 'stale', `更新が止まっています（${ageText(snapshot.fetchedAt)}）`))
       }
 
       function shortModel(model) {
@@ -323,12 +323,12 @@
           el.period.textContent = ''
           el.every.textContent = ''
           el.list.append(node('div', 'empty', loadError || '読み込み中…'))
-          renderAge()
+          renderWhere()
           return
         }
         el.period.textContent = PERIOD_LABELS[snapshot.period] ?? snapshot.period
         el.every.textContent = `↻ ${snapshot.refreshSeconds}秒`
-        renderAge()
+        renderWhere()
 
         if (!snapshot.configured) {
           // Without approval the settings cannot be read, so "not set" may be wrong.
@@ -363,20 +363,46 @@
         return JSON.stringify({ ...value, fetchedAt: 0 })
       }
 
-      async function load() {
+      // The panel drives the reads: it asks the worker once per refresh interval while
+      // it is visible, and every ask is one read of the server. Hidden, it asks nothing,
+      // so nothing is read.
+      let timer = null
+      let loading = false
+      let forceNext = false
+
+      function schedule() {
+        clearTimeout(timer)
+        if (document.hidden) return
+        const seconds = Math.min(600, Math.max(5, Number(snapshot?.refreshSeconds) || 15))
+        timer = setTimeout(() => void load(), seconds * 1000)
+      }
+
+      async function load(force = false) {
+        if (loading) {
+          // A setting changed during a read: read once more when it is back.
+          forceNext = forceNext || force
+          return
+        }
+        loading = true
+        clearTimeout(timer)
+        let same = false
         try {
-          const next = await orca.plugin.request('snapshot.get', {})
-          const same = snapshot !== null && loadError === '' && contentKey(next) === contentKey(snapshot)
+          const next = await orca.plugin.request('snapshot.get', { force })
+          same = snapshot !== null && loadError === '' && contentKey(next) === contentKey(snapshot)
           snapshot = next
           loadError = ''
-          if (same) {
-            renderAge()
-            return
-          }
         } catch (error) {
           loadError = String(error?.message ?? error)
         }
-        render()
+        loading = false
+        if (same) renderWhere()
+        else render()
+        if (forceNext) {
+          forceNext = false
+          void load(true)
+        } else {
+          schedule()
+        }
       }
 
       function seconds(ms) {
@@ -408,30 +434,13 @@
         el.test.disabled = false
       })
 
-      orca.plugin.on('snapshot', (next) => {
-        snapshot = next
-        loadError = ''
-        render()
-      })
-      orca.plugin.on('tick', ({ fetchedAt }) => {
-        if (!snapshot) return
-        snapshot.fetchedAt = fetchedAt
-        renderAge()
-      })
-      /** Lets the worker stop at once instead of waiting for the beats to stop. */
-      function sayHidden() {
-        void orca.plugin.request('panel.hidden', {}).catch(() => {})
-      }
-
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden) sayHidden()
+        if (document.hidden) clearTimeout(timer)
         else void load()
       })
-      window.addEventListener('pagehide', sayHidden)
-      setInterval(renderAge, 1000)
-      setInterval(() => {
-        if (!document.hidden) void load()
-      }, HEARTBEAT_MS)
+      if (typeof orca.settings?.onDidChange === 'function') {
+        orca.settings.onDidChange(() => void load(true))
+      }
 
       void load()
     </script>

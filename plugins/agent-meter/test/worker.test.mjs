@@ -10,13 +10,11 @@ import { SENTINEL as READER_SENTINEL } from '../reader/reader.mjs'
 import {
   DEFAULTS,
   SENTINEL,
-  STATUS_ITEMS,
   buildBootstrap,
   buildGroups,
   buildSshArgs,
   checkTarget,
   childEnv,
-  contentKey,
   describeRun,
   filledEnv,
   flattenAgents,
@@ -27,8 +25,6 @@ import {
   readerError,
   readerPayload,
   resolveSsh,
-  statusBarItems,
-  summarize,
   tailLines,
   terminalHandles,
   terminalTitles
@@ -529,75 +525,11 @@ test('groups: sessions Orca does not list are numbered by their own key', () => 
   )
 })
 
-test('status bar: speed and context are separate items with their own colour', () => {
-  assert.deepEqual(STATUS_ITEMS, ['speed', 'context'])
-  const snapshot = snapshotOf(READER)
-  const summary = summarize(snapshot.groups)
-  assert.equal(summary.tokPerSec, 82.4)
-  assert.deepEqual(summary.fullest[0], { percent: 73, name: 'alpha #2' })
-  const { speed, context } = statusBarItems(snapshot)
-  // A context at 73% colours the context item only.
-  assert.deepEqual({ text: speed.text, tone: speed.tone, visible: speed.visible }, { text: '⚡ 82 tok/s', tone: 'neutral', visible: true })
-  assert.equal(speed.tooltip, 'Agent Meter 出力速度（直近1時間）: Claude test-1 ≈82 tok/s / Codex gpt-test-1 ≈40 tok/s / pi local-test-1 120 tok/s')
-  assert.deepEqual({ text: context.text, tone: context.tone, visible: context.visible }, { text: '◔ 73%', tone: 'warning', visible: true })
-  // The fullest agents, fullest first.
-  assert.equal(
-    context.tooltip,
-    'Agent Meter コンテキスト: alpha #2 73% / beta 18% / alpha #1 13% / develop #2 12% / develop Fix login flow 10% / develop codex: review 5%'
-  )
-})
-
-test('status bar: tones at 70 and 90 percent, and the states with no figures', () => {
-  const at = (tokens) =>
-    statusBarItems(snapshotOf({ models: [], agents: [{ ...READER.agents[0], contextTokens: tokens }] }))
-  assert.deepEqual(
-    [at(138_000), at(140_000), at(179_000), at(180_000)].map((items) => items.context.tone),
-    ['neutral', 'warning', 'warning', 'danger']
-  )
-  // However full the context, the speed item stays neutral.
-  assert.deepEqual({ text: at(190_000).speed.text, tone: at(190_000).speed.tone }, { text: '⚡ —', tone: 'neutral' })
-  assert.equal(at(190_000).context.text, '◔ 95%')
-
-  // Nothing to show a percentage for: the context item is hidden, not shown empty.
-  const empty = statusBarItems(snapshotOf({ models: [], agents: [] }))
-  assert.deepEqual({ text: empty.speed.text, context: empty.context }, { text: '⚡ —', context: { visible: false } })
-
-  // A failed read warns on the speed item; the context keeps the last good figure.
-  const failed = statusBarItems(snapshotOf(READER, { error: { message: 'SSH で接続できません\n: x' } }))
-  assert.deepEqual({ text: failed.speed.text, tone: failed.speed.tone }, { text: '⚡ 取得失敗', tone: 'warning' })
-  assert.equal(/\n/.test(failed.speed.tooltip), false)
-  assert.deepEqual({ text: failed.context.text, tone: failed.context.tone }, { text: '◔ 73%', tone: 'warning' })
-  assert.match(failed.context.tooltip, /^Agent Meter コンテキスト（前回の値）: /)
-
-  const unset = statusBarItems({ configured: false, groups: [] })
-  assert.deepEqual({ text: unset.speed.text, context: unset.context }, { text: '⚡ 未設定', context: { visible: false } })
-
-  const long = statusBarItems(
-    snapshotOf({
-      models: Array.from({ length: 30 }, (_, index) => ({ agent: 'pi', model: `local-test-model-${index}`, tokPerSec: 10, latest: 10, samples: 1, estimated: false })),
-      agents: Array.from({ length: 12 }, (_, index) => ({ id: null, key: `k${index}`, agent: 'dsh', cwd: `/work/a-rather-long-workspace-name-${index}`, state: 'idle', model: 'm', contextTokens: 1000 * index, contextWindow: 20_000, windowEstimated: false }))
-    })
-  )
-  for (const item of [long.speed, long.context]) {
-    assert.ok(item.tooltip.length <= 256)
-    assert.ok(item.text.length <= 64)
-  }
-})
-
 test('consent: only the refusal for want of approval counts', () => {
   assert.equal(isConsentError({ code: 'consent_required', message: 'plugin is not enabled with current consent' }), true)
   assert.equal(isConsentError(new Error('plugin is not enabled with current consent')), true)
   assert.equal(isConsentError({ code: 'invalid_params', message: 'unknown status bar item' }), false)
   assert.equal(isConsentError(undefined), false)
-})
-
-test('change detection ignores the clock', () => {
-  const first = snapshotOf(READER, { fetchedAt: 1 })
-  const second = snapshotOf(READER, { fetchedAt: 2 })
-  assert.equal(contentKey(first), contentKey(second))
-  const moved = snapshotOf({ ...READER, models: [{ ...READER.models[0], tokPerSec: 41 }] }, { fetchedAt: 2 })
-  assert.notEqual(contentKey(first), contentKey(moved))
-  assert.notEqual(contentKey(first), contentKey({ ...first, consentRequired: true }))
 })
 
 // --- manifest ------------------------------------------------------------------------
@@ -608,10 +540,10 @@ test('manifest: settings match the worker defaults and hold no real host', () =>
   for (const [key, value] of Object.entries(DEFAULTS)) assert.equal(settings[key].default, value, key)
   assert.equal(settings.sshTarget.placeholder, 'user@host')
   assert.deepEqual(settings.period.enum, ['15m', '1h', '24h'])
-  assert.deepEqual(settings.displayMode.enum, ['statusbar', 'panel'])
   assert.equal(settings.refreshSeconds.minimum, 5)
-  // The worker updates the items by these ids, and each is pressable.
-  assert.deepEqual(manifest.contributes.statusBarItems.map((item) => item.id), STATUS_ITEMS)
-  for (const item of manifest.contributes.statusBarItems) assert.equal(item.command, manifest.contributes.commands[0].id)
   assert.equal(manifest.contributes.panels[0].title, 'パフォーマンス')
+  // The panel is all there is: nothing in the status bar, so nothing that keeps the
+  // worker running while no panel is open.
+  assert.deepEqual(Object.keys(manifest.contributes).sort(), ['panels', 'settings'])
+  assert.deepEqual(manifest.capabilities, [{ kind: 'settings:own' }])
 })
