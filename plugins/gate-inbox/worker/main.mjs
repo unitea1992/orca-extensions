@@ -7,8 +7,10 @@
 // state.
 //
 // The plugin contributes a status bar item, so Orca keeps this worker running while
-// the plugin is enabled. The worker is the only poller: it reads on a timer, updates
-// the status bar count, notifies about new gates and tells open panels to re-read.
+// the plugin is enabled. With the `statusBar` setting on, the worker is the only poller:
+// it reads on a timer, updates the status bar count, notifies about new gates and tells
+// open panels to re-read. With it off there is no timer: the worker only reads when an
+// open panel asks, so nothing is polled while no panel is showing.
 
 import { exec, execFile } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -406,21 +408,28 @@ const countGates = (state) => state.groups.reduce((total, group) => total + grou
 let active = null
 let timer = null
 let pollMs = 20_000
+/** The `statusBar` setting: whether the worker polls on its own and shows the count. */
+let polling = true
 /** Bumped when a setting that changes what is read changes. */
 let generation = 0
 /** The one build in flight: `{ promise, force, generation }`. */
 let building = null
 /** The one forced build waiting for the build in flight to finish. */
 let forcedNext = null
-/** What the latest build ended with: `{ at, state }` or `{ at, error: { code, message } }`. */
+/** What the latest build ended with: `{ at, generation, state }` or `{ at, generation,
+ *  error: { code, message } }`. */
 let last = null
 let lastCount = null
 let lastStatusKey = ''
 let lastLogLine = ''
 let lastPostError = ''
 
-function updateStatusBar(orca, patch) {
+const STATUS_HIDDEN = { text: '確認待ち', tone: 'neutral', tooltip: 'Gate Inbox', visible: false }
+
+function updateStatusBar(orca, shown) {
   if (!hostHas(orca, 'statusBar.update', 2)) return
+  // Switched off in the settings: the item stays hidden whatever a build found.
+  const patch = polling ? shown : STATUS_HIDDEN
   const key = JSON.stringify(patch)
   if (key === lastStatusKey) return
   lastStatusKey = key
@@ -470,8 +479,13 @@ function publish(orca, state, error) {
       visible: count > 0 || failed > 0
     })
   }
+  postChanged(orca)
+}
+
+/** Tells open panels to ask again. Small on purpose: a post is capped at 256 KiB, so the
+ *  panel asks for the state instead of receiving it. */
+function postChanged(orca) {
   try {
-    // Small on purpose: a post is capped at 256 KiB, so the panel asks for the state.
     orca.panels.post('state.changed', { at: Date.now() })
   } catch (postError) {
     // Posted every poll, so a host that refuses it must not fill the log.
@@ -500,10 +514,10 @@ async function notify(orca, fresh) {
   }
 }
 
-async function runBuild(orca, force) {
+async function runBuild(orca, force, startedAt) {
   try {
     const { state, fresh } = await buildState(orca, force)
-    if (active === orca) last = { at: Date.now(), state }
+    if (active === orca) last = { at: Date.now(), generation: startedAt, state }
     publish(orca, state, null)
     void notify(orca, fresh)
     return state
@@ -511,6 +525,7 @@ async function runBuild(orca, force) {
     if (active === orca) {
       last = {
         at: Date.now(),
+        generation: startedAt,
         error: { code: error.code ?? 'action_failed', message: String(error.message ?? error) }
       }
     }
@@ -521,7 +536,7 @@ async function runBuild(orca, force) {
 
 function startBuild(orca, force) {
   const mine = { force, generation, promise: null }
-  mine.promise = runBuild(orca, force).finally(() => {
+  mine.promise = runBuild(orca, force, generation).finally(() => {
     if (building === mine) building = null
   })
   building = mine
@@ -533,10 +548,10 @@ function startBuild(orca, force) {
  *  recent enough; the timer never passes it. */
 async function getState(orca, { force = false, cached = false } = {}) {
   if (building) {
-    const coversForce = building.force && building.generation === generation
-    if (!force || coversForce) return building.promise
-    // The build in flight may have started before the click or the settings change, so
-    // it cannot answer a forced read. Queue one forced build behind it, shared by all.
+    const current = building.generation === generation
+    if (current && (building.force || !force)) return building.promise
+    // The build in flight started before the click, or before a settings change, so it
+    // cannot answer this read. Queue one forced build behind it, shared by all.
     forcedNext ??= (async () => {
       while (building) await building.promise.catch(() => {})
       forcedNext = null
@@ -544,25 +559,36 @@ async function getState(orca, { force = false, cached = false } = {}) {
     })()
     return forcedNext
   }
-  if (!force && cached && last && Date.now() - last.at < pollMs * 2) {
+  // While the worker polls, a panel's own timer only ever needs what the worker has.
+  // Without that timer the panels drive the reads, so each of their ticks must read.
+  const freshMs = polling ? pollMs * 2 : Math.max(1000, pollMs - 1000)
+  if (
+    !force &&
+    cached &&
+    last &&
+    last.generation === generation &&
+    Date.now() - last.at < freshMs
+  ) {
     if (last.error) throw cliError(last.error.code, last.error.message)
     return last.state
   }
   return startBuild(orca, force)
 }
 
-async function readPollMs(orca) {
+async function readSettings(orca) {
   try {
     const seconds = Number(await orca.settings.get('refreshSeconds')) || 20
     pollMs = Math.min(600, Math.max(5, seconds)) * 1000
+    polling = (await orca.settings.get('statusBar')) !== false
   } catch {
-    // Keep the interval in use.
+    // Keep the values in use.
   }
 }
 
 function schedule(orca) {
   clearTimeout(timer)
-  if (active !== orca) return
+  timer = null
+  if (active !== orca || !polling) return
   timer = setTimeout(() => void tick(orca, false), pollMs)
 }
 
@@ -573,8 +599,20 @@ async function tick(orca, force) {
     // Already logged and shown in the status bar; the next tick tries again.
   }
   if (active !== orca) return
-  await readPollMs(orca)
+  await readSettings(orca)
   schedule(orca)
+}
+
+/** Follows the `statusBar` setting: start the timer, or stop it and hide the item. */
+function applyPolling(orca) {
+  if (active !== orca) return
+  if (polling) {
+    void tick(orca, false)
+    return
+  }
+  clearTimeout(timer)
+  timer = null
+  updateStatusBar(orca, STATUS_HIDDEN)
 }
 
 export default function activate(orca) {
@@ -592,13 +630,10 @@ export default function activate(orca) {
   lastPostError = ''
   sweep = emptySweep('')
 
-  // The manifest cannot declare an item hidden, so hide it until the first count is in.
-  updateStatusBar(orca, {
-    text: '確認待ち',
-    tone: 'neutral',
-    tooltip: 'Gate Inbox: 読み込み中',
-    visible: false
-  })
+  // The manifest cannot declare an item hidden, so hide it until the first count is in
+  // (and for good when the `statusBar` setting is off).
+  polling = true
+  updateStatusBar(orca, STATUS_HIDDEN)
 
   // Not tied to the asking panel's abort signal: the build is shared with the timer and
   // with other panels.
@@ -611,15 +646,22 @@ export default function activate(orca) {
       if (active !== orca) return
       if (key === 'environment' || key === 'runId') {
         generation += 1
-        clearTimeout(timer)
-        void tick(orca, true)
+        if (polling) {
+          clearTimeout(timer)
+          void tick(orca, true)
+        } else {
+          // No timer to re-read with: an open panel asks again, a closed one costs nothing.
+          postChanged(orca)
+        }
       } else if (key === 'refreshSeconds') {
-        void readPollMs(orca).then(() => schedule(orca))
+        void readSettings(orca).then(() => schedule(orca))
+      } else if (key === 'statusBar') {
+        void readSettings(orca).then(() => applyPolling(orca))
       }
     })
   }
 
-  void readPollMs(orca).then(() => tick(orca, false))
+  void readSettings(orca).then(() => applyPolling(orca))
 }
 
 export function deactivate() {

@@ -274,7 +274,7 @@
         }
       }
 
-      /** The one line the coordinator parses: `41 B / 42 Meyasubako (gate_a, gate_b)`. */
+      /** The one line the coordinator parses: `41 B / 42 既存の API を使う (gate_a, gate_b)`. */
       function groupLine(group) {
         const answered = group.gates
           .map((gate, index) => ({ gate, index }))
@@ -685,8 +685,9 @@
         return mine.promise
       }
 
-      // The worker polls and posts `state.changed`; this timer only asks for what the
-      // worker already has, and wakes the worker again if it was stopped.
+      // With the status bar on, the worker polls and posts `state.changed`; this timer only
+      // asks for what the worker already has, and wakes the worker again if it was stopped.
+      // With it off the worker has no timer, and this one is what makes it read.
       function schedule() {
         clearTimeout(timer)
         const seconds = Math.min(600, Math.max(5, Number(settings.refreshSeconds) || 20))

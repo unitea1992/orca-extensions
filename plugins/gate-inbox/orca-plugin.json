@@ -67,11 +67,18 @@
       {
         "key": "refreshSeconds",
         "title": "更新間隔（秒）",
-        "description": "ゲートを読み直す間隔。プラグインが有効な間、パネルを閉じていてもこの間隔で読む。",
+        "description": "ゲートを読み直す間隔。「ステータスバーに件数を出す」がオンなら、パネルを閉じていてもこの間隔で読む。",
         "type": "integer",
         "default": 20,
         "minimum": 5,
         "maximum": 600
+      },
+      {
+        "key": "statusBar",
+        "title": "ステータスバーに件数を出す",
+        "description": "オフにすると項目を隠し、パネルを閉じている間の読み取りを止める（読むのはパネルを開いている間だけになり、通知もその間だけ）。",
+        "type": "boolean",
+        "default": true
       },
       {
         "key": "notify",
