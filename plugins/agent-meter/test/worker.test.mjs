@@ -26,6 +26,7 @@ import {
   pickEnvironment,
   readerError,
   readerPayload,
+  splitNote,
   resolveSsh,
   tailLines,
   terminalTitles
@@ -509,6 +510,22 @@ test('model names: the generic rule splits the id into words, with no list behin
   assert.equal(modelLabel('provider/'), 'provider/')
 })
 
+test('model names: trailing notes are split off the name, whatever they say', () => {
+  assert.deepEqual(splitNote('Fixture Local [2x Rig]'), { main: 'Fixture Local', note: '[2x Rig]' })
+  assert.deepEqual(splitNote('Claude Fable 5.2 (1M)'), { main: 'Claude Fable 5.2', note: '(1M)' })
+  // Several at the end, taken together from the end.
+  assert.deepEqual(splitNote('Name [a] (b)  [c]'), { main: 'Name', note: '[a] (b)  [c]' })
+  // Only the end: a bracket inside stays in the name.
+  assert.deepEqual(splitNote('Name [a] tail'), { main: 'Name [a] tail', note: '' })
+  assert.deepEqual(splitNote('Name (a) tail [b]'), { main: 'Name (a) tail', note: '[b]' })
+  // No note, nothing but a note, empty, and a bracket with no end.
+  assert.deepEqual(splitNote('Plain Name'), { main: 'Plain Name', note: '' })
+  assert.deepEqual(splitNote('[only]'), { main: '[only]', note: '' })
+  assert.deepEqual(splitNote(''), { main: '', note: '' })
+  assert.deepEqual(splitNote(' Name [open '), { main: 'Name [open', note: '' })
+  assert.deepEqual(splitNote(undefined), { main: '', note: '' })
+})
+
 test('model names: the agent\'s own catalog name wins, else the generic rule', () => {
   const names = { codex: { 'cat-model-1': 'Catalog Model One', 'blank': '' }, pi: { 'local-x': ' ' } }
   assert.equal(modelName(names, 'codex', 'cat-model-1'), 'Catalog Model One')
@@ -542,6 +559,16 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
   )
   // The id stays next to the name, for the tooltip.
   assert.equal(groups[0].model, 'claude-test-5-2')
+  assert.deepEqual([groups[0].labelMain, groups[0].labelNote], ['Claude Test 5.2', ''])
+  // A note in a catalog name, and the suffix the rule makes, are split off the same way.
+  const noted = buildGroups(
+    { names: { codex: { 'gpt-6-test': 'Catalog Name [2x Rig]' } }, models: [], agents: [{ id: 'a', agent: 'codex', cwd: '/w', state: 'idle', model: 'gpt-6-test', effort: '' }, { id: 'b', agent: 'claude', cwd: '/w', state: 'idle', model: 'claude-test-5-2[1m]', effort: '' }] },
+    []
+  )
+  assert.deepEqual(noted.map((group) => [group.label, group.labelMain, group.labelNote]), [
+    ['Claude Test 5.2 (1M)', 'Claude Test 5.2', '(1M)'],
+    ['Catalog Name [2x Rig]', 'Catalog Name', '[2x Rig]']
+  ])
   const [alpha, beta] = groups[0].rows
   assert.deepEqual(
     { working: alpha.working, percent: alpha.percent, estimated: alpha.windowEstimated },

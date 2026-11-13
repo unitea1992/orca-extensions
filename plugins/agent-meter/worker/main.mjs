@@ -733,6 +733,19 @@ export function modelLabel(id) {
   return `${words.join(' ')}${suffix}`
 }
 
+/**
+ * A model's display name → the name itself and the note trailing it: every bracketed
+ * `[...]` or `(...)` group at the very end, however many, whatever they say. `Deep Flash
+ * [2x Rig] (1M)` → `Deep Flash` and `[2x Rig] (1M)`. A name that is nothing but notes has
+ * no note: there would be no name left.
+ */
+export function splitNote(label) {
+  const text = String(label ?? '').trim()
+  const match = /^(.*?)\s*((?:(?:\[[^\]]*\]|\([^)]*\))\s*)+)$/.exec(text)
+  if (!match || match[1] === '') return { main: text, note: '' }
+  return { main: match[1], note: match[2].trim() }
+}
+
 /** The name to show for a model: its agent's catalog name from the reader, else the id
  *  spelled by the generic rule. */
 export function modelName(names, agent, id) {
@@ -758,6 +771,9 @@ export function buildGroups(reader, agents = []) {
         agent,
         model: model ?? null,
         label: model ? modelName(reader.names, agent, model) : null,
+        // The panel shows the name and its trailing note as two elements.
+        labelMain: null,
+        labelNote: '',
         effort: model ? String(effort ?? '') : '',
         tokPerSec: null,
         latest: null,
@@ -795,6 +811,12 @@ export function buildGroups(reader, agents = []) {
     })
   }
   const list = [...groups.values()]
+  for (const group of list) {
+    if (group.label === null) continue
+    const { main, note } = splitNote(group.label)
+    group.labelMain = main
+    group.labelNote = note
+  }
   for (const group of list) {
     group.rows.sort(
       (left, right) =>

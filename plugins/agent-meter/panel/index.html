@@ -110,7 +110,20 @@
       .group { display: flex; flex-direction: column; padding-top: 6px; }
       .head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-weight: 600; }
       .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 5px; }
-      .what .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* The name is kept whole while the note after it ("[2x ...]", "(1M)") can give way:
+         the note's shrink factor is far larger, so it is cut first, to nothing if need be;
+         the name is cut only when it alone is wider than the heading. The kind tag, the
+         effort and the speed never shrink. */
+      .what .label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .what .note {
+        flex: 0 1000 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 400;
+        color: var(--quiet);
+      }
       .kind {
         flex: 0 0 auto;
         font-size: 10px;
@@ -300,10 +313,17 @@
         const head = node('div', 'head')
         const what = node('span', group.model ? 'what' : 'what none')
         what.append(node('span', 'kind', AGENT_LABELS[group.agent] ?? group.agent))
-        what.append(node('span', 'label', group.model ? (group.label ?? group.model) : 'セッション未検出'))
+        // The name in the usual colour, its trailing note apart in the muted one.
+        const main = group.model ? (group.labelMain ?? group.label ?? group.model) : 'セッション未検出'
+        what.append(node('span', 'label', main))
+        if (group.model && group.labelNote) what.append(node('span', 'note', group.labelNote))
         // The reasoning effort the model ran with, when the log names one.
         if (group.model && group.effort) what.append(node('span', 'effort', group.effort))
-        if (group.model) what.title = group.effort ? `${group.model} · ${group.effort}` : group.model
+        // Hovering gives everything before any of it was cut: the whole name, the id, the effort.
+        if (group.model) {
+          const full = group.labelNote ? `${group.labelMain} ${group.labelNote}` : ''
+          what.title = [full, group.model, group.effort].filter(Boolean).join(' · ')
+        }
         head.append(what)
         const speed = node('span', 'speed')
         if (group.tokPerSec !== null) {
