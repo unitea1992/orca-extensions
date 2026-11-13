@@ -397,25 +397,25 @@ test('environment: a name the CLI cannot take falls back to its id', () => {
   )
 })
 
-test('worktree ps: known agent kinds, named repository · workspace', () => {
+test('worktree ps: known agent kinds, with their repository and workspace', () => {
   assert.deepEqual(
-    flattenAgents(fixture('worktree-ps.json')).map(({ id, type, state, cwd, name, title }) => ({ id, type, state, cwd, name, title })),
+    flattenAgents(fixture('worktree-ps.json')).map(({ id, type, state, cwd, repo, name, title }) => ({ id, type, state, cwd, repo, name, title })),
     [
-      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', name: 'alpha-repo · alpha', title: '' },
-      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', name: 'alpha-repo · alpha', title: '' },
+      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', repo: 'alpha-repo', name: 'alpha', title: '' },
+      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', repo: 'alpha-repo', name: 'alpha', title: '' },
       // Orca names no repository here: the workspace alone.
-      { id: 'tab-2:leaf-2', type: 'pi', state: 'idle', cwd: '/work/beta', name: 'beta', title: '' },
+      { id: 'tab-2:leaf-2', type: 'pi', state: 'idle', cwd: '/work/beta', repo: '', name: 'beta', title: '' },
       // A repository's main checkout: the folder says the repository, the name the workspace.
-      { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: '' },
+      { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: '' },
       // Whitespace in a title is flattened to one line.
-      { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: 'Fix login flow' },
-      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: '' }
+      { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: 'Fix login flow' },
+      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: '' }
     ]
   )
   assert.deepEqual(flattenAgents({}), [])
   // The repository is not said twice when the workspace has its name.
   const same = flattenAgents({ worktrees: [{ path: '/work/solo', repo: 'solo', displayName: 'solo', agents: [{ paneKey: 'p', agentType: 'pi' }] }] })
-  assert.equal(same[0].name, 'solo')
+  assert.deepEqual([same[0].repo, same[0].name], ['', 'solo'])
 })
 
 test('terminal list: pane key to title, where one is set', () => {
@@ -519,17 +519,18 @@ test('model names: any other id is split into words, vendors and versions capita
 test('groups: per model and effort, kinds in a fixed order, agents under theirs', () => {
   const groups = groupsOf(READER)
   assert.deepEqual(
-    groups.map((group) => [group.agent, group.label, group.effort, group.tokPerSec, group.rows.map((row) => [row.name, row.sub])]),
+    groups.map((group) => [group.agent, group.label, group.effort, group.tokPerSec, group.rows.map((row) => [row.repo, row.name, row.sub])]),
     [
       // One model at two efforts: two groups, each with its own speed and its own agents.
-      ['claude', 'Claude Test 5.2', 'high', 82.4, [['alpha-repo · alpha', '#2'], ['beta', ''], ['delta · develop', 'Fix login flow']]],
-      ['claude', 'Claude Test 5.2', 'medium', 110, [['delta · develop', '#2']]],
-      ['claude', null, '', null, [['none', '']]],
-      ['codex', 'GPT-6 Test', 'high', 40, [['alpha-repo · alpha', '#1']]],
+      // A row is named by its repository and its workspace, kept apart for the panel.
+      ['claude', 'Claude Test 5.2', 'high', 82.4, [['alpha-repo', 'alpha', '#2'], ['', 'beta', ''], ['delta', 'develop', 'Fix login flow']]],
+      ['claude', 'Claude Test 5.2', 'medium', 110, [['delta', 'develop', '#2']]],
+      ['claude', null, '', null, [['', 'none', '']]],
+      ['codex', 'GPT-6 Test', 'high', 40, [['alpha-repo', 'alpha', '#1']]],
       // An agent whose effort had no measured response in the period still has its heading.
-      ['codex', 'GPT-6 Test', 'low', null, [['delta · develop', 'codex: review']]],
+      ['codex', 'GPT-6 Test', 'low', null, [['delta', 'develop', 'codex: review']]],
       // pi's model has a speed but no live agent runs it: no heading for it.
-      ['dsh', 'Dsh Test 1', '', null, [['gamma', '']]]
+      ['dsh', 'Dsh Test 1', '', null, [['', 'gamma', '']]]
     ]
   )
   // The id stays next to the name, for the tooltip.
@@ -543,7 +544,7 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
   // No window known: tokens only.
   assert.deepEqual({ tokens: groups[5].rows[0].tokens, percent: groups[5].rows[0].percent }, { tokens: 9000, percent: null })
   // A row holds what is shown and nothing to act on: rows cannot be pressed.
-  assert.deepEqual(Object.keys(alpha).sort(), ['id', 'name', 'percent', 'state', 'sub', 'tokens', 'window', 'windowEstimated', 'working'])
+  assert.deepEqual(Object.keys(alpha).sort(), ['id', 'name', 'percent', 'repo', 'state', 'sub', 'tokens', 'window', 'windowEstimated', 'working'])
 })
 
 test('groups: speeds alone, with no live agent, show nothing', () => {

@@ -601,6 +601,7 @@ export function flattenAgents(listed) {
   const agents = []
   for (const worktree of listed?.worktrees ?? []) {
     if (typeof worktree?.path !== 'string') continue
+    const workspace = String(worktree.displayName || baseName(worktree.path))
     for (const agent of worktree.agents ?? []) {
       if (!LISTED_AGENTS.has(agent?.agentType) || typeof agent.paneKey !== 'string') continue
       agents.push({
@@ -608,7 +609,8 @@ export function flattenAgents(listed) {
         type: agent.agentType,
         state: String(agent.state ?? ''),
         cwd: worktree.path,
-        name: workspaceLabel(worktree),
+        name: workspace,
+        repo: repositoryOf(worktree, workspace),
         title: cleanTitle(agent.displayName || agent.taskTitle),
         updatedAt: Number(agent.updatedAt) || 0
       })
@@ -617,12 +619,11 @@ export function flattenAgents(listed) {
   return agents
 }
 
-/** `repository · workspace`, as the row is named; the repository is left out when Orca
- *  gives none or it says the same as the workspace. */
-function workspaceLabel(worktree) {
-  const name = String(worktree.displayName || baseName(worktree.path))
+/** The repository a workspace belongs to, for the `repository/workspace` a row is named
+ *  by; empty when Orca gives none or it says the same as the workspace. */
+function repositoryOf(worktree, name) {
   const repo = typeof worktree.repo === 'string' ? worktree.repo.trim() : ''
-  return repo !== '' && repo !== name ? `${repo} · ${name}` : name
+  return repo !== name ? repo : ''
 }
 
 function cleanTitle(value) {
@@ -795,6 +796,7 @@ export function buildGroups(reader, agents = []) {
     groupOf(row.agent, row.model, row.model ? row.effort : '').rows.push({
       id: row.id,
       name: known?.name ?? baseName(row.cwd ?? ''),
+      repo: known?.repo ?? '',
       sub: known?.sub ?? '',
       // Sessions Orca does not list (DSH) are told apart below, by directory and key.
       unlisted: row.id === null ? { where: `${row.agent}\u0000${row.cwd ?? ''}`, key: String(row.key ?? '') } : null,

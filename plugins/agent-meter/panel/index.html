@@ -151,6 +151,14 @@
       }
       .name { min-width: 0; }
       .name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* `repository/workspace`: when there is no room the repository gives way first, so
+         the workspace, the part that tells rows apart, stays readable. */
+      .name > .path { display: flex; align-items: center; }
+      .path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .path .dot { flex: 0 0 auto; }
+      .path .repo { flex: 0 1000 auto; min-width: 0; color: var(--quiet); }
+      .path .slash { flex: 0 0 auto; color: var(--quiet); }
+      .path .ws { flex: 0 1 auto; min-width: 0; }
       .sub { padding-left: 11px; font-size: 10px; color: var(--quiet); }
       .dot {
         display: inline-block;
@@ -254,13 +262,17 @@
         // desktop to a workspace on the paired server.
         const element = node('div', 'row')
         const name = node('span', 'name')
-        const first = node('span')
-        first.append(node('span', row.working ? 'dot working' : 'dot'), row.name)
+        const first = node('span', 'path')
+        first.append(node('span', row.working ? 'dot working' : 'dot'))
+        // The slash is its own piece, so it stays when the repository is cut short.
+        if (row.repo) first.append(node('span', 'repo', row.repo), node('span', 'slash', '/'))
+        first.append(node('span', 'ws', row.name))
         name.append(first)
         // Several agents share this workspace: its title, or a number, tells them apart.
         if (row.sub) name.append(node('span', 'sub', row.sub))
         element.append(name)
-        const label = row.sub ? `${row.name} ${row.sub}` : row.name
+        const where = row.repo ? `${row.repo}/${row.name}` : row.name
+        const label = row.sub ? `${where} ${row.sub}` : where
 
         const track = node('span', 'track')
         const percent = node('span', 'pct')
