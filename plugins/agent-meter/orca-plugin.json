@@ -46,7 +46,7 @@
       {
         "key": "displayMode",
         "title": "表示先",
-        "description": "ステータスバーに出すか、パネルだけにするか。パネルだけのときは、パネルを開いている間だけサーバーを読む。",
+        "description": "ステータスバーに出すあいだは、プラグインが有効な間ずっとサーバーを読む。パネルのみにすると、パネルを開いている間だけ読む。",
         "type": "string",
         "default": "statusbar",
         "enum": ["statusbar", "panel"],

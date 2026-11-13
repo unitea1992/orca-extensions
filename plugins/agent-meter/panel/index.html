@@ -166,7 +166,8 @@
       const WARN_PERCENT = 70
       const DANGER_PERCENT = 90
       /** While visible the panel asks again this often, which also tells the worker a
-       *  panel is open (it polls for a hidden status bar only then). */
+       *  panel is open: in panel-only mode it reads the server only then. The worker
+       *  takes two missed beats as closed (PANEL_ALIVE_MS in worker/main.mjs). */
       const HEARTBEAT_MS = 20_000
 
       const el = {
@@ -348,9 +349,16 @@
         snapshot.fetchedAt = fetchedAt
         renderAge()
       })
+      /** Lets the worker stop at once instead of waiting for the beats to stop. */
+      function sayHidden() {
+        void orca.plugin.request('panel.hidden', {}).catch(() => {})
+      }
+
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) void load()
+        if (document.hidden) sayHidden()
+        else void load()
       })
+      window.addEventListener('pagehide', sayHidden)
       setInterval(renderAge, 1000)
       setInterval(() => {
         if (!document.hidden) void load()

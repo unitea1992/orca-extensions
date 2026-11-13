@@ -9,7 +9,9 @@
 //
 // The plugin contributes a status bar item, so Orca keeps this worker running while
 // the plugin is enabled. The worker is the only poller: it updates the status bar and
-// posts to open panels when something changed.
+// posts to open panels when something changed. It reads the server only while there
+// is something on screen to keep current: always with the status bar item shown, and
+// with `displayMode: panel` only while a panel is open. Otherwise no timer runs.
 
 import { exec, execFile, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
@@ -582,8 +584,10 @@ let last = null
 let lastKey = ''
 let lastStatusKey = ''
 let lastLogLine = ''
-/** When a panel last asked; in panel-only mode the worker polls only while one is open. */
+/** When a panel last asked; 0 once it said it was hidden. */
 let panelSeenAt = 0
+/** Panel-only mode with no panel open: no timer runs until a panel asks again. */
+let paused = false
 let environment = { arg: 'local', label: 'local' }
 let terminals = { at: 0, environment: '', handles: new Map() }
 
@@ -712,9 +716,22 @@ function refresh(orca) {
   return building
 }
 
+/**
+ * A visible panel asks again every 20 s (HEARTBEAT_MS in panel/index.html) and says
+ * when it is hidden. A frame that goes away without saying so is noticed here: two
+ * missed beats mean it is closed.
+ */
+export const PANEL_ALIVE_MS = 50_000
+
+/** Whether anything on screen needs the server read: the status bar item always does,
+ *  a panel only while it is open. */
+export function shouldPoll(displayMode, seenAt, now) {
+  return displayMode !== 'panel' || now - seenAt < PANEL_ALIVE_MS
+}
+
 function schedule(orca) {
   clearTimeout(timer)
-  if (active !== orca) return
+  if (active !== orca || paused) return
   timer = setTimeout(() => void tick(orca), pollMs)
 }
 
@@ -722,17 +739,28 @@ async function tick(orca) {
   try {
     const settings = await readSettings(orca)
     pollMs = settings.refreshSeconds * 1000
-    const panelOpen = Date.now() - panelSeenAt < Math.max(3 * pollMs, 45_000)
-    if (settings.displayMode !== 'panel' || panelOpen) {
+    if (shouldPoll(settings.displayMode, panelSeenAt, Date.now())) {
+      paused = false
       await refresh(orca)
     } else {
-      // Panel-only mode with no panel open: nothing is on screen, so nothing is read.
+      // Panel-only mode with no panel open: nothing is on screen, so nothing is read
+      // and no timer is left running. A panel that opens, or a setting, starts it again.
+      paused = true
       updateStatusBar(orca, { visible: false })
     }
   } catch (error) {
     orca.log(`tick ERR ${error.message}`)
   }
-  if (active === orca) schedule(orca)
+  schedule(orca)
+}
+
+/** A panel is on screen: make sure the server is being read. */
+function panelSeen(orca) {
+  panelSeenAt = Date.now()
+  if (!paused) return
+  paused = false
+  clearTimeout(timer)
+  void tick(orca)
 }
 
 async function focusAgent(id) {
@@ -754,14 +782,21 @@ export default function activate(orca) {
   lastStatusKey = ''
   lastLogLine = ''
   panelSeenAt = 0
+  paused = false
 
   // A panel asks when it opens and while it stays visible. It gets what is already
   // known at once; a stale answer is followed by a post when the read finishes.
   orca.panels.handle('snapshot.get', async () => {
-    panelSeenAt = Date.now()
+    panelSeen(orca)
     if (!last) return refresh(orca)
     if (Date.now() - last.fetchedAt > 2 * pollMs) void refresh(orca)
     return last
+  })
+  // Best effort: a frame that is torn down may not get to say so, which the missed
+  // heartbeats cover. With several panels open, the next beat of another one resumes.
+  orca.panels.handle('panel.hidden', () => {
+    panelSeenAt = 0
+    return { ok: true }
   })
   orca.panels.handle('agent.focus', (input) => focusAgent(input?.id))
 
@@ -779,6 +814,7 @@ export default function activate(orca) {
 
 export function deactivate() {
   active = null
+  paused = false
   clearTimeout(timer)
   timer = null
   for (const child of children) killTree(child)
