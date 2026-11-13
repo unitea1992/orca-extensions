@@ -47,7 +47,7 @@ plugins/<id>/              orca-plugin.json と実装（ビルド不要の素の
 
 1. プラグインを直し、`plugins/<id>/orca-plugin.json` の `version` を上げる
 2. コミットする（`release-entry` は HEAD のファイルをハッシュするので、未コミットの変更は入りません）
-3. そのコミットに `v<version>` タグを打つ
+3. そのコミットに `<id>/v<version>` タグを打つ（例: `gate-inbox/v0.2.0`。複数のプラグインで版が重なるため、id を前に付ける。`v0.1.0` と `v0.1.1` は gate-inbox の初期のタグ）
 4. カタログのエントリを出す
 
    ```bash
