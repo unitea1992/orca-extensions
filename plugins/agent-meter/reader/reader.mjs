@@ -1026,10 +1026,25 @@ async function collectOpencode(run) {
 // ---------------------------------------------------------------------------
 // DSH
 
-/** Token accounting of an `assistant/message`, as dsh-tui's own projection reads it:
- *  the reasoning field is `think` or `reasoning` depending on the adapter generation. */
+/** Token accounting of an `assistant/message`. Two shapes exist:
+ *  - the short names dsh-tui's projection reads (`input`, `output`, `think` or `reasoning`,
+ *    `cacheRead`, `cacheWrite`), where the parts add up;
+ *  - the `*Tokens` names a real DSH 0.2 log carries (`inputTokens`, `outputTokens`,
+ *    `totalTokens`, optionally `reasoningTokens` and cache counts). Here `inputTokens` is
+ *    the whole prompt and `reasoningTokens` is part of `outputTokens`, as in the AI SDK
+ *    usage these logs mirror, so neither is added on top. */
 export function dshTokens(usage) {
   if (!isRecord(usage)) return null
+  if ('inputTokens' in usage || 'outputTokens' in usage) {
+    const tokens = {
+      input: num(usage.inputTokens),
+      output: num(usage.outputTokens),
+      think: 0,
+      cacheRead: 0,
+      cacheWrite: 0
+    }
+    return tokens.input + tokens.output > 0 ? tokens : null
+  }
   const tokens = {
     input: num(usage.input),
     output: num(usage.output),

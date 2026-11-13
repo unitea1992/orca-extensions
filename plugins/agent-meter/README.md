@@ -105,7 +105,7 @@ Settings → Plugins → Agent Meter
 
 ## 数字の出し方
 
-tok/s は「1回の応答で生成したトークン数 ÷ その応答にかかった時間」です。時間はリクエストを送ってから最後のトークンまで（最初のトークンを待つ時間を含む）。ツールの実行時間は含めません。出力 50 トークン未満・0.5 秒未満の応答は、速度というより待ち時間を測ってしまうので除きます。モデルごとに期間内の**中央値**を出します（見出しにホバーすると最新値と件数）。
+tok/s は「1回の応答で生成したトークン数 ÷ その応答にかかった時間」です。時間はリクエストを送ってから最後のトークンまで（最初のトークンを待つ時間を含む）。ツールの実行時間は含めません。出力 50 トークン未満・0.5 秒未満の応答は、速度というより待ち時間を測ってしまうので除きます。モデルごとに期間内の**中央値**を出します（見出しにホバーすると最新値と件数）。作業がどれだけの速さで進んでいるかを1つの数字で見るための定義なので、長いプロンプトの読み込みが遅いローカルのモデルでは、生成そのものの速さより低く出ます。
 
 | エージェント | 読むもの | 生成トークン | 時間 | コンテキスト | 上限 |
 |---|---|---|---|---|---|
@@ -113,7 +113,7 @@ tok/s は「1回の応答で生成したトークン数 ÷ その応答にかか
 | Codex | `~/.codex/sessions/**/rollout-*.jsonl`（Orca のアカウント配下も） | `last_token_usage.output_tokens`（reasoning を含む） | ターンの開始、または前の応答の集計（`token_count`）とツール出力の遅いほうから、`token_usage_record`（無ければ最後の出力項目）まで | `last_token_usage.total_tokens` | `model_context_window` |
 | pi | `~/.pi/agent/sessions/<cwd>/*.jsonl` | `usage.output`（reasoning を含む） | `durationMs` | `usage.totalTokens` | `models.json` の `contextWindow` |
 | OpenCode | `~/.local/share/opencode/opencode.db` | `tokens.output + tokens.reasoning` | `time.created` 〜 `time.streamed` | `input + cache.read + cache.write` | `opencode.json` の `limit.context` |
-| DSH | `~/.dsh/sessions/<cwd>/session-*/session.v4.jsonl.zstd` | `usage.output + usage.think` | `request/context` 〜 ストリームの最後 | `input + cacheRead + cacheWrite` | `request/context` の `contextWindow` |
+| DSH | `~/.dsh/sessions/<cwd>/session-*/session.v4.jsonl.zstd` | `usage.outputTokens`（旧形式は `usage.output + usage.think`） | `request/context` 〜 ストリームの最後 | `usage.inputTokens`（旧形式は `input + cacheRead + cacheWrite`） | `request/context` の `contextWindow` |
 
 推定になるもの:
 
@@ -145,7 +145,7 @@ Orca の一覧には、エージェントのワークスペースのパスはあ
 ## 制限
 
 - **リモートの作業場所へは移動できません**。行をクリックしても何も起きません。Orca のプラグイン API と CLI が、クライアント側の画面を、ペアリング先の作業場所に切り替えられないためです（プラグイン API のワークスペース一覧はリモートの作業場所を数えず、CLI の `worktree activate --environment` はサーバー側でだけ効きます）
-- **DSH は実データで未確認**です。使用量の入った実ログが手元に無かったため、dsh-tui の型定義から実装し、合成データでだけテストしています
+- DSH は DSH 0.2 の実ログ（`inputTokens` / `outputTokens` / `totalTokens`）で確認しました。推論トークンは `outputTokens` に含まれる前提で、別に足していません
 - `sshTarget` と `remoteNode` に空白や引用符は使えません。必要なら `~/.ssh/config` に Host を書いて、その名前を入れてください
 - OpenCode を読むにはサーバーの Node.js が 22.13 以降（`node:sqlite`）、DSH を読むには 22.15 以降（zstd）である必要があります。古い場合はそのエージェントだけ出ません
 - 更新のたびに SSH 接続を張り直します。Linux / macOS では `~/.ssh/config` に `ControlMaster auto` と `ControlPersist` を書くと接続を使い回せます（Windows の OpenSSH は非対応）

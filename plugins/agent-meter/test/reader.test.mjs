@@ -328,6 +328,20 @@ test('opencode: where a config can name the effort of a request with no variant'
 test('dsh: token fields and compact stream records', () => {
   assert.deepEqual(dshTokens({ input: 1, output: 2, reasoning: 3 }), { input: 1, output: 2, think: 3, cacheRead: 0, cacheWrite: 0 })
   assert.equal(dshTokens({}), null)
+  // The shape a real DSH 0.2 log carries: inputTokens is the whole prompt and
+  // reasoningTokens is already inside outputTokens.
+  assert.deepEqual(dshTokens({ inputTokens: 29_000, outputTokens: 80, totalTokens: 29_080 }), {
+    input: 29_000,
+    output: 80,
+    think: 0,
+    cacheRead: 0,
+    cacheWrite: 0
+  })
+  assert.deepEqual(
+    dshTokens({ inputTokens: 500, outputTokens: 120, reasoningTokens: 40, cacheReadTokens: 300 }),
+    { input: 500, output: 120, think: 0, cacheRead: 0, cacheWrite: 0 }
+  )
+  assert.equal(dshTokens({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }), null)
   assert.equal(dshStreamEnd([{ type: 'text-chunks', time0: 100, dt: [10, 20], texts: ['a', 'b', 'c'] }]), 130)
   assert.equal(dshStreamEnd([{ type: 'chunk', time: 50, chunk: {} }, { type: 'chunk', time: 40, chunk: {} }]), 50)
   assert.equal(dshStreamEnd([]), null)
