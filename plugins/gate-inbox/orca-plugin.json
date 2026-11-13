@@ -3,8 +3,8 @@
   "execution": "trusted-worker",
   "id": "gate-inbox",
   "name": "Gate Inbox",
-  "version": "0.1.1",
-  "description": "Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行をまとめてコピーできるようにする。",
+  "version": "0.2.0",
+  "description": "Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行をまとめてコピーできるようにする。件数をステータスバーに出し、新着を通知する。",
   "license": "MIT",
   "engines": {
     "orca": ">=1.4.248"
@@ -17,6 +17,9 @@
     },
     {
       "kind": "storage:own"
+    },
+    {
+      "kind": "notifications:show"
     }
   ],
   "contributes": {
@@ -27,6 +30,23 @@
         "icon": "bell",
         "entry": "panel/index.html",
         "ui": "html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "gateInbox.toggleSidebar",
+        "title": "Gate Inbox: 右サイドバーを開閉",
+        "action": "sidebar.right.toggle"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "pending",
+        "text": "確認待ち",
+        "icon": "bell",
+        "tone": "neutral",
+        "tooltip": "Gate Inbox: 読み込み中",
+        "command": "gateInbox.toggleSidebar"
       }
     ],
     "settings": [
@@ -47,10 +67,25 @@
       {
         "key": "refreshSeconds",
         "title": "更新間隔（秒）",
+        "description": "ゲートを読み直す間隔。「ステータスバーに件数を出す」がオンなら、パネルを閉じていてもこの間隔で読む。",
         "type": "integer",
         "default": 20,
         "minimum": 5,
         "maximum": 600
+      },
+      {
+        "key": "statusBar",
+        "title": "ステータスバーに件数を出す",
+        "description": "オフにすると項目を隠し、パネルを閉じている間の読み取りを止める（読むのはパネルを開いている間だけになり、通知もその間だけ）。",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "notify",
+        "title": "新着をデスクトップ通知",
+        "description": "新しい確認待ちが届いたらデスクトップ通知を出す。起動直後に既にあったものは通知しない。",
+        "type": "boolean",
+        "default": true
       }
     ]
   }

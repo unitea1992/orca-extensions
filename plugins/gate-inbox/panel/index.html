@@ -180,6 +180,8 @@
 
       let state = null
       let answers = {}
+      /** Nothing may be pruned from `answers` before the stored ones are in. */
+      let answersLoaded = false
       let hideAnswered = false
       /** Free-input text that has not been committed yet, so a re-render cannot eat it. */
       const drafts = new Map()
@@ -192,6 +194,10 @@
       let settings = {}
       let timer = null
       let flashTimer = null
+      /** The request in flight, so a timer, a click and a worker post share one answer. */
+      let pending = null
+      // A cold sweep runs up to 100 s in the worker; the default 30 s would give up on it.
+      const REQUEST_TIMEOUT_MS = 120_000
 
       const escapeHtml = (text) =>
         String(text).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])
@@ -268,7 +274,7 @@
         }
       }
 
-      /** The one line the coordinator parses: `41 B / 42 Meyasubako (gate_a, gate_b)`. */
+      /** The one line the coordinator parses: `41 B / 42 既存の API を使う (gate_a, gate_b)`. */
       function groupLine(group) {
         const answered = group.gates
           .map((gate, index) => ({ gate, index }))
@@ -300,7 +306,8 @@
         objective.title = `${group.objective}\n${group.runId}`
         const count = document.createElement('span')
         count.className = 'runcount'
-        count.textContent = `${group.gates.length}件`
+        count.textContent = group.stale ? `${group.gates.length}件（前回の値）` : `${group.gates.length}件`
+        if (group.stale) count.title = 'この Run は今回読めなかったので、前回読めた内容を表示しています'
         const copy = document.createElement('button')
         copy.className = 'copy'
         copy.textContent = 'コピー'
@@ -605,6 +612,7 @@
       async function loadAnswers() {
         const stored = await orca.storage.get('answers').catch(() => null)
         answers = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...stored } : {}
+        answersLoaded = true
         const hidden = await orca.storage.get('hideAnswered').catch(() => null)
         hideAnswered = hidden === true
         const folded = await orca.storage.get('collapsedGroups').catch(() => null)
@@ -616,11 +624,42 @@
         await orca.storage.set('answers', answers).catch(() => {})
       }
 
-      async function refresh(options = {}) {
+      /** Runs the worker could not read this time; their cards show the previous read. */
+      function staleBanner(errors) {
+        if (!Array.isArray(errors) || errors.length === 0) return ''
+        const lines = errors
+          .slice(0, 3)
+          .map((failed) => `・${failed.objective || failed.runId}: ${String(failed.message).slice(0, 200)}`)
+        if (errors.length > lines.length) lines.push(`・ほか ${errors.length - lines.length}件`)
+        return `${errors.length}件の Run を読めませんでした。前回の値を表示しています。\n${lines.join('\n')}`
+      }
+
+      /** Forgets answers (and open/draft state) of gates that are gone, so storage does not
+       *  grow forever. Only when the worker says its id list is whole: a failed read or a
+       *  Run pin must never look like "resolved". */
+      function pruneAnswers() {
+        if (!answersLoaded || !state || state.complete !== true || !Array.isArray(state.gateIds)) return
+        const alive = new Set(state.gateIds)
+        let changed = false
+        for (const id of Object.keys(answers)) {
+          if (alive.has(id)) continue
+          delete answers[id]
+          changed = true
+        }
+        for (const id of [...drafts.keys()]) if (!alive.has(id)) drafts.delete(id)
+        for (const id of [...expandedCards]) if (!alive.has(id)) expandedCards.delete(id)
+        for (const id of [...expandedBody]) if (!alive.has(id)) expandedBody.delete(id)
+        if (changed) void saveAnswers()
+      }
+
+      async function requestState(force) {
         try {
-          const next = await orca.plugin.request('state.get', { force: options.force === true })
+          const next = await orca.plugin.request('state.get', { force }, { timeoutMs: REQUEST_TIMEOUT_MS })
+          // A slow answer must not replace a newer one that arrived first.
+          if (state && next.fetchedAt < state.fetchedAt) return
           state = next
-          showBanner('')
+          pruneAnswers()
+          showBanner(staleBanner(state.errors))
           render()
         } catch (error) {
           showBanner(`読み取りに失敗しました（${error.code ?? 'error'}）\n${error.message ?? ''}`)
@@ -634,6 +673,21 @@
         }
       }
 
+      function refresh(options = {}) {
+        const force = options.force === true
+        // Join the request in flight unless this one is forced and that one is not.
+        if (pending && (pending.force || !force)) return pending.promise
+        const mine = { force, promise: null }
+        mine.promise = requestState(force).finally(() => {
+          if (pending === mine) pending = null
+        })
+        pending = mine
+        return mine.promise
+      }
+
+      // With the status bar on, the worker polls and posts `state.changed`; this timer only
+      // asks for what the worker already has, and wakes the worker again if it was stopped.
+      // With it off the worker has no timer, and this one is what makes it read.
       function schedule() {
         clearTimeout(timer)
         const seconds = Math.min(600, Math.max(5, Number(settings.refreshSeconds) || 20))
@@ -645,7 +699,6 @@
 
       async function readSettings() {
         settings = {
-          environment: await orca.settings.get('environment').catch(() => ''),
           refreshSeconds: await orca.settings.get('refreshSeconds').catch(() => 20)
         }
       }
@@ -654,15 +707,15 @@
         await loadAnswers()
         await readSettings()
         orca.settings.onDidChange(async ({ key }) => {
-          if (key !== 'environment' && key !== 'runId' && key !== 'refreshSeconds') return
+          // The worker re-reads on `environment` and `runId` itself and posts when done.
+          if (key !== 'refreshSeconds') return
           await readSettings()
-          if (key === 'refreshSeconds') {
-            schedule()
-            return
-          }
-          await refresh({ force: true })
+          schedule()
         })
-        await refresh({ force: true })
+        orca.plugin.on('state.changed', () => {
+          if (!document.hidden) void refresh()
+        })
+        await refresh()
         schedule()
       }
 
