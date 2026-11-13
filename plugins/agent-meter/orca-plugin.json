@@ -45,12 +45,12 @@
     "settings": [
       {
         "key": "displayMode",
-        "title": "表示",
+        "title": "表示先",
         "description": "ステータスバーに出すか、パネルだけにするか。パネルだけのときは、パネルを開いている間だけサーバーを読む。",
         "type": "string",
         "default": "statusbar",
         "enum": ["statusbar", "panel"],
-        "enumLabels": ["ステータスバー＋パネル", "パネルのみ"]
+        "enumLabels": ["ステータスバー（クリックでパネル）", "パネルのみ"]
       },
       {
         "key": "sshTarget",
@@ -93,7 +93,7 @@
         "type": "string",
         "default": "1h",
         "enum": ["15m", "1h", "24h"],
-        "enumLabels": ["直近15分", "直近1時間", "直近24時間"]
+        "enumLabels": ["15分", "1時間", "24時間"]
       },
       {
         "key": "refreshSeconds",

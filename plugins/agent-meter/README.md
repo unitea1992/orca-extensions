@@ -7,13 +7,13 @@
 ```
 ステータスバー   ⚡ 82 tok/s · ◔ 73%
 
-パネル           user@host                         12秒前
-                 [Claude] claude-…               ≈82 tok/s
-                   ● checkout-flow   ███████░░░   ≈73%
-                   ○ docs-site       ██░░░░░░░░   ≈21%
-                 [Codex] gpt-…                   ≈44 tok/s
+パネル           パフォーマンス            user@host · 12秒前
+                 [Claude] …                      ≈82 tok/s
+                   ● checkout-flow   ███████░░░    73%
+                   ○ docs-site       ██░░░░░░░░    21%
+                 [Codex] …                       ≈44 tok/s
                    ● api-migration   █████████░    93%
-                 直近1時間 ・ 15秒ごとに更新
+                 直近1時間                          ↻ 15秒
 ```
 
 ## 前提
@@ -59,7 +59,7 @@ Settings → Plugins → Agent Meter
 
 | key | 意味 | 既定 |
 |---|---|---|
-| `displayMode` | `statusbar`＝ステータスバー＋パネル／`panel`＝パネルのみ | `statusbar` |
+| `displayMode` | 表示先。`statusbar`＝ステータスバー（クリックでパネル）／`panel`＝パネルのみ | `statusbar` |
 | `sshTarget` | サーバーの接続先。`user@host` か `~/.ssh/config` の Host 名 | 空（入れるまで動きません） |
 | `identityFile` | `ssh -i` に渡す秘密鍵 | 空＝`~/.ssh/config` と既定の鍵 |
 | `remoteNode` | サーバー側の `node` のパス | 空＝自動で探す |
@@ -82,7 +82,7 @@ Settings → Plugins → Agent Meter
 
 - モデルごとに見出し（エージェントの種類・モデル名・そのモデルの tok/s）。その下に、そのモデルを使っている生きたエージェントが並びます
 - 行の丸は、作業中なら緑。バーと % はコンテキスト使用率です。行にホバーすると `146k / 200k` のようにトークン数が出ます
-- `≈` は推定値です（下の「数字の出し方」）
+- tok/s の `≈` は推定値です（下の「数字の出し方」）
 - 端末で動いているエージェントの行はクリックでその端末に移動します
 - `セッション未検出` は、Orca の一覧にはいるが、対応するセッションログが見つからなかったエージェントです
 
@@ -93,15 +93,15 @@ tok/s は「1回の応答で生成したトークン数 ÷ その応答にかか
 | エージェント | 読むもの | 生成トークン | 時間 | コンテキスト | 上限 |
 |---|---|---|---|---|---|
 | Claude Code | `~/.claude/projects/<cwd>/*.jsonl`（Orca のプロファイル配下も） | `usage.output_tokens`（同じ `message.id` のブロックをまとめて最大値） | `api-request` の記録（無ければ親レコード）から最後のブロックまで | 最新のリクエストの `input + cache_read + cache_creation` | ログに無いので推定 |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl`（Orca のアカウント配下も） | `last_token_usage.output_tokens`（reasoning を含む） | 前の応答の集計（`token_count`）から `token_usage_record` まで | `last_token_usage.total_tokens` | `model_context_window` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl`（Orca のアカウント配下も） | `last_token_usage.output_tokens`（reasoning を含む） | ターンの開始、または前の応答の集計（`token_count`）とツール出力の遅いほうから、`token_usage_record`（無ければ最後の出力項目）まで | `last_token_usage.total_tokens` | `model_context_window` |
 | pi | `~/.pi/agent/sessions/<cwd>/*.jsonl` | `usage.output`（reasoning を含む） | `durationMs` | `usage.totalTokens` | `models.json` の `contextWindow` |
 | OpenCode | `~/.local/share/opencode/opencode.db` | `tokens.output + tokens.reasoning` | `time.created` 〜 `time.streamed` | `input + cache.read + cache.write` | `opencode.json` の `limit.context` |
 | DSH | `~/.dsh/sessions/<cwd>/session-*/session.v4.jsonl.zstd` | `usage.output + usage.think` | `request/context` 〜 ストリームの最後 | `input + cacheRead + cacheWrite` | `request/context` の `contextWindow` |
 
-`≈` が付くもの:
+推定になるもの:
 
-- **Claude Code と Codex の tok/s** … 応答の開始と終了を、ログの各行が書かれた時刻から割り出しているため
-- **Claude Code のコンテキスト %** … Claude Code は上限をログに残しません。モデル名が `[1m]` で終わるか、今回読んだそのモデルのセッションのどれかが 200k を超えていれば 1M、そうでなければ 200k とみなします。1M のモデルを 200k 未満でしか使っていないと、実際より高く出ます
+- **Claude Code と Codex の tok/s**（`≈` が付きます）… 応答の開始と終了を、ログの各行が書かれた時刻から割り出しているため
+- **Claude Code のコンテキスト %**（ホバーで `146k / ≈200k` と出ます）… Claude Code は上限をログに残しません。モデル名が `[1m]` で終わるか、今回読んだそのモデルのセッションのどれかが 200k を超えていれば 1M、そうでなければ 200k とみなします。1M のモデルを 200k 未満でしか使っていないと、実際より高く出ます
 
 上限が分からないエージェント（pi で `models.json` に無いモデルなど）は、% の代わりにトークン数だけを出します。
 
@@ -152,10 +152,10 @@ Orca の一覧には、エージェントのワークスペースのパスはあ
 
 ```bash
 cd plugins/agent-meter
-node --test "test/*.test.mjs"
+node --test
 ```
 
-フィクスチャ（`test/fixtures/`）は全部作りものです。形を変えたら `node test/fixtures/generate.mjs` で作り直してください。
+フィクスチャ（`test/fixtures/`）は全部作りものです。形を変えたら `node scripts/make-fixtures.mjs` で作り直してください。
 
 サーバー上で reader だけを試すこともできます。
 

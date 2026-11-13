@@ -30,7 +30,9 @@ import {
   readHead,
   readTail
 } from '../reader/reader.mjs'
-import { T0 } from './fixtures/generate.mjs'
+
+/** The instant every fixture is timed from (scripts/make-fixtures.mjs). */
+const T0 = Date.UTC(2026, 0, 15, 10, 0, 0)
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const fixture = (name) => readFileSync(join(fixtures, name), 'utf8')
@@ -182,12 +184,16 @@ test('codex: a response is timed without the tool run that follows it', () => {
 
 test('codex: without token_usage_record the last output item ends the response', () => {
   const { samples, context } = parseCodex(fixture('codex/rollout-old.jsonl'))
-  // Reasoning is reported apart here, so it is added: 200 + 50.
+  // Reasoning is reported apart here, so it is added: 200 + 50. The second response
+  // starts at its tool's output, not at the token_count 8 s before it.
   assert.deepEqual(
     samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms })),
-    [{ tokens: 250, ms: 2000 }]
+    [
+      { tokens: 250, ms: 2000 },
+      { tokens: 100, ms: 2000 }
+    ]
   )
-  assert.equal(context.window, 200_000)
+  assert.deepEqual({ tokens: context.tokens, window: context.window }, { tokens: 5200, window: 200_000 })
 })
 
 test('codex: a cut rollout takes its model from the head', () => {
@@ -370,7 +376,7 @@ test('collect: speeds per model and a context per live agent', async () => {
     )
     assert.equal(speed['codex/gpt-test-review'].tokPerSec, 100)
     // The rollout without token_usage_record, from the Orca account folder.
-    assert.equal(speed['codex/gpt-test-2'].tokPerSec, 125)
+    assert.equal(speed['codex/gpt-test-2'].tokPerSec, 87.5)
     assert.deepEqual(
       { tokPerSec: speed['pi/local-test-1'].tokPerSec, samples: speed['pi/local-test-1'].samples, estimated: speed['pi/local-test-1'].estimated },
       { tokPerSec: 100, samples: 2, estimated: false }

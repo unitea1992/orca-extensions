@@ -550,16 +550,19 @@ const CODEX_OUTPUT_ITEMS = new Set([
  * One rollout (or its tail) → speed samples and the latest context.
  *
  * `task_complete.duration_ms` spans the whole turn, tool runs included, so it is not
- * used. A response is timed on its own instead: it starts when the previous one was
- * accounted for (`token_count`, written once its tool output is in) or when the turn
- * started, and ends at its `token_usage_record`, or at its last output item when the
- * rollout has no such record. `output_tokens` already includes reasoning tokens.
+ * used. A response is timed on its own instead. It starts when the turn started, or
+ * at the later of the previous response's `token_count` and that response's tool
+ * output (some versions write `token_count` before the tool runs, some after). It
+ * ends at its `token_usage_record`, or at its last output item when the rollout has
+ * no such record. `output_tokens` already includes reasoning tokens.
  */
 export function parseCodex(text, head = {}) {
   let model = head.model ?? null
   let startedAt = null
   let endedAt = null
   let lastItemAt = null
+  /** A tool output that arrived after the current response's items: the next one's start. */
+  let outputAt = null
   let lastTotal = null
   let context = null
   let window = null
@@ -578,7 +581,13 @@ export function parseCodex(text, head = {}) {
     }
     if (record.type === 'response_item') {
       const kind = payload.type
-      if (at !== null && (CODEX_OUTPUT_ITEMS.has(kind) || (kind === 'message' && payload.role === 'assistant'))) {
+      if (at === null) continue
+      if (typeof kind === 'string' && kind.endsWith('_output')) {
+        // Nothing generated since the last token_count: the tool ran after it, so the
+        // next response starts here. Otherwise the token_count is still to come.
+        if (endedAt === null && lastItemAt === null) startedAt = at
+        else outputAt = at
+      } else if (CODEX_OUTPUT_ITEMS.has(kind) || (kind === 'message' && payload.role === 'assistant')) {
         lastItemAt = at
       }
       continue
@@ -588,6 +597,7 @@ export function parseCodex(text, head = {}) {
       startedAt = at
       endedAt = null
       lastItemAt = null
+      outputAt = null
       if (num(payload.model_context_window) > 0) window = payload.model_context_window
       continue
     }
@@ -612,9 +622,10 @@ export function parseCodex(text, head = {}) {
     if (num(last.total_tokens) > 0 && at !== null) {
       context = { tokens: num(last.total_tokens), model: model ?? 'unknown', at, window }
     }
-    startedAt = at
+    startedAt = at === null ? outputAt : Math.max(at, outputAt ?? 0)
     endedAt = null
     lastItemAt = null
+    outputAt = null
   }
 
   if (context) {

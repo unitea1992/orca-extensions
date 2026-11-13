@@ -1,15 +1,15 @@
-// Writes the fixtures next to this file. Everything here is invented: ids, model names,
-// paths and text. Run `node test/fixtures/generate.mjs` after changing a shape, and
-// commit the result.
+// Writes test/fixtures. Everything here is invented: ids, model names, paths and text.
+// Run `node scripts/make-fixtures.mjs` after changing a shape, and commit the result.
+// It lives outside test/ because `node --test` runs every module under a test folder.
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const here = dirname(fileURLToPath(import.meta.url))
+const here = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'fixtures')
 
-/** Every fixture is timed from here. */
-export const T0 = Date.UTC(2026, 0, 15, 10, 0, 0)
+/** Every fixture is timed from here; the tests use the same instant. */
+const T0 = Date.UTC(2026, 0, 15, 10, 0, 0)
 const iso = (offsetMs) => new Date(T0 + offsetMs).toISOString()
 
 function write(name, records, tail = '') {
@@ -146,13 +146,18 @@ write('codex/rollout-new.jsonl', [
   tokenCount(39_000, 0, null)
 ])
 
-// An older rollout: no token_usage_record, reasoning reported apart from output.
+// An older rollout: no token_usage_record, reasoning reported apart from output, and
+// token_count written when the response ends, before its tool runs.
 write('codex/rollout-old.jsonl', [
   codex(600_000, 'session_meta', { id: 'thread-old', cwd: '/work/beta', originator: 'fixture', source: 'cli' }),
   codex(600_100, 'turn_context', { model: 'gpt-test-2' }),
   codex(600_200, 'event_msg', { type: 'task_started', model_context_window: 200_000 }),
-  codex(602_200, 'response_item', { type: 'message', role: 'assistant' }),
-  tokenCount(602_250, 5000, { output_tokens: 200, reasoning_output_tokens: 50, total_tokens: 5000 }, { last_usage_includes_reasoning: false })
+  codex(602_200, 'response_item', { type: 'function_call', name: 'fixture_tool' }),
+  tokenCount(602_250, 5000, { output_tokens: 200, reasoning_output_tokens: 50, total_tokens: 5000 }, { last_usage_includes_reasoning: false }),
+  // The tool ran for about 8 s; the next response starts when its output is in.
+  codex(610_000, 'response_item', { type: 'function_call_output' }),
+  codex(612_000, 'response_item', { type: 'message', role: 'assistant' }),
+  tokenCount(612_050, 10_200, { output_tokens: 100, reasoning_output_tokens: 0, total_tokens: 5200 }, { last_usage_includes_reasoning: false })
 ])
 
 write('codex/rollout-subagent.jsonl', [
