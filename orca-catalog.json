@@ -108,6 +108,27 @@
       ],
       "releases": [
         {
+          "version": "0.1.1",
+          "commit": "155a99bdc72f93ba1035d7c3d1fbd5dc54db7020",
+          "contentHash": "1c95111c6a7155411938cc62419efa4d0ae071c3d735bd22c6d3c956e5c3b3fc",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Agent Meter",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "パフォーマンス"
+            }
+          ],
+          "capabilities": [
+            "settings:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-13",
+          "changelog": "DSH 0.2 の実ログの使用量（inputTokens / outputTokens）を読むようにした。0.1.0 では DSH が一覧に出なかった。"
+        },
+        {
           "version": "0.1.0",
           "commit": "26449759b3287b66d0371eec140ed7f080e8ceec",
           "contentHash": "8a161c48d4031b3c47a5d787fce9c71df5b75872cc2867a708fd542fde8b6e17",
