@@ -1,0 +1,80 @@
+{
+  "worktrees": [
+    {
+      "path": "/work/alpha",
+      "repo": "alpha-repo",
+      "displayName": "alpha",
+      "agents": [
+        {
+          "paneKey": "tab-1:leaf-1",
+          "agentType": "claude",
+          "state": "working",
+          "updatedAt": 1768471205000,
+          "children": []
+        },
+        {
+          "paneKey": "structured-agent-session-1:pane-1",
+          "agentType": "codex",
+          "state": "done",
+          "updatedAt": 1768471204000
+        },
+        {
+          "paneKey": "tab-9:leaf-9",
+          "agentType": "other-agent",
+          "state": "working",
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
+      "path": "/work/beta",
+      "displayName": "",
+      "agents": [
+        {
+          "paneKey": "tab-2:leaf-2",
+          "agentType": "pi",
+          "state": "idle",
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
+      "path": "/work/delta",
+      "repo": "delta",
+      "displayName": "develop",
+      "agents": [
+        {
+          "paneKey": "tab-5:leaf-b",
+          "agentType": "claude",
+          "state": "done",
+          "displayName": null,
+          "taskTitle": null,
+          "updatedAt": 1768471200000
+        },
+        {
+          "paneKey": "tab-5:leaf-a",
+          "agentType": "claude",
+          "state": "done",
+          "displayName": "Fix   login\nflow",
+          "taskTitle": "Fix login flow",
+          "updatedAt": 1768471200000
+        },
+        {
+          "paneKey": "tab-6:leaf-a",
+          "agentType": "codex",
+          "state": "done",
+          "displayName": null,
+          "taskTitle": null,
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
+      "path": "/work/empty",
+      "displayName": "empty",
+      "agents": []
+    }
+  ],
+  "totalCount": 4,
+  "truncated": false
+}

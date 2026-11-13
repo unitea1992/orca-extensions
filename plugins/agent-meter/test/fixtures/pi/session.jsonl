@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"pi-session","timestamp":"2026-01-15T10:00:00.000Z","cwd":"/work/alpha"}
+{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-01-15T10:00:00.010Z","provider":"testprov","modelId":"local-test-1"}
+{"type":"message","id":"pu1","parentId":null,"timestamp":"2026-01-15T10:00:01.000Z","message":{"role":"user","content":"fixture prompt"}}
+{"type":"message","id":"pa1","parentId":null,"timestamp":"2026-01-15T10:00:10.000Z","message":{"role":"assistant","content":[],"provider":"testprov","model":"local-test-1","usage":{"input":100,"output":200,"reasoning":150,"cacheRead":30000,"cacheWrite":0,"totalTokens":30300},"durationMs":4000,"stopReason":"stop","thinkingLevel":"high"}}
+{"type":"message","id":"pt1","parentId":null,"timestamp":"2026-01-15T10:00:11.000Z","message":{"role":"toolResult","toolName":"fixture","durationMs":9000}}
+{"type":"message","id":"pa2","parentId":null,"timestamp":"2026-01-15T10:00:14.000Z","message":{"role":"assistant","content":[],"provider":"testprov","model":"local-test-1","usage":{"input":400,"output":300,"reasoning":0,"cacheRead":30300,"cacheWrite":0,"totalTokens":31000},"durationMs":2000,"stopReason":"stop","thinkingLevel":"high"}}
+{"type":"message","id":"pa3","parentId":null,"timestamp":"2026-01-15T10:00:15.000Z","message":{"role":"assistant","content":[],"provider":"testprov","model":"local-test-1","usage":{"input":0,"output":0,"reasoning":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0},"durationMs":100,"stopReason":"error","thinkingLevel":"high"}}

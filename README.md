@@ -7,6 +7,7 @@ Orca の任意プラグインをまとめるカタログです。Orca 本体や�
 | プラグイン | 概要 | 前提 |
 | --- | --- | --- |
 | [`gate-inbox`](plugins/gate-inbox/README.md) | Gate Inbox: orchestration の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする | コーディネーターが orchestration の Run を持ち、`gate-create` で確認事項を積んでいること |
+| [`agent-meter`](plugins/agent-meter/README.md) | Agent Meter: リモートの Orca サーバーで動くエージェント（Claude Code / Codex / pi / OpenCode / DSH）の、モデル別の出力速度（tok/s）とコンテキスト使用率を、右サイドバーのパネルに出す。パネルを開いている間だけサーバーを読む | 手元からサーバーへ鍵で SSH できること。サーバーに Node.js 22.13 以降があること |
 
 各プラグインは独立して導入・更新できます。
 
@@ -31,7 +32,7 @@ orca plugin update unitea1992.gate-inbox
 ```
 
 - プラグインは **Orca のクライアント側**（デスクトップアプリが動いているマシン）に入れてください。サーバー側に入れても、ペアリングしたクライアントのサイドバーには出ません
-- `gate-inbox` は `trusted-worker`（自分の権限で Node が動く）なので承認が必要です
+- `gate-inbox` と `agent-meter` は `trusted-worker`（自分の権限で Node が動く）なので承認が必要です
 - カタログを追加すると、Orca の Plugins 画面に「未インストール」として並び、そこからも導入できます
 
 ## 構成

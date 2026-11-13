@@ -1,0 +1,12 @@
+{
+  // A config file may hold comments and trailing commas.
+  "provider": {
+    "ocprov": {
+      // Sent with every request: what a message with no variant chosen runs with.
+      "options": { "body": { "reasoning_effort": "low" } },
+      "models": {
+        "oc-test-1": { "limit": { "context": 200000, "output": 8000 } },
+      },
+    },
+  },
+}

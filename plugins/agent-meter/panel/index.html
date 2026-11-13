@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>パフォーマンス</title>
+    <style>
+      /* Orca sets --orca-* from the active theme and a `light` or `dark` class on <html>.
+         The fallbacks only show outside Orca. */
+      :root {
+        color-scheme: light dark;
+        --fb-fg: #e6e6e6;
+        --fb-bg: #1b1b1b;
+        --fb-quiet: #9a9a9a;
+        --fb-line: #333;
+        --fb-fill: #2a2a2a;
+        --fb-hi: #6aa9ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+      }
+      html.light {
+        --fb-fg: #1f2328;
+        --fb-bg: #ffffff;
+        --fb-quiet: #656d76;
+        --fb-line: #d0d7de;
+        --fb-fill: #f0f2f4;
+        --fb-hi: #0969da;
+        --ok: #1a7f37;
+        --warn: #9a6700;
+        --bad: #cf222e;
+      }
+      :root {
+        --fg: var(--orca-foreground, var(--fb-fg));
+        --bg: var(--orca-background, var(--fb-bg));
+        --quiet: var(--orca-muted-foreground, var(--fb-quiet));
+        --line: var(--orca-border, var(--fb-line));
+        --fill: var(--orca-accent, var(--fb-fill));
+        --track: var(--orca-muted, var(--fb-fill));
+        --hi: var(--orca-primary, var(--fb-hi));
+        --danger: var(--orca-destructive, var(--bad));
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 12px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .bar, .foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        flex: 0 0 auto;
+      }
+      .bar { border-bottom: 1px solid var(--line); }
+      .foot { border-top: 1px solid var(--line); font-size: 11px; color: var(--quiet); padding: 6px 10px; }
+      .title { flex: 0 0 auto; font-weight: 600; }
+      .where {
+        flex: 0 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        color: var(--quiet);
+        font-size: 11px;
+      }
+      .where span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .where .stale { font-size: 10px; }
+      .banner {
+        margin: 8px 8px 0;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--quiet);
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .banner.error { border-color: var(--warn); color: var(--fg); white-space: normal; }
+      .banner.error > div { white-space: pre-wrap; }
+      .banner button {
+        display: block;
+        margin-top: 6px;
+        font: inherit;
+        font-size: 11px;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+      .banner button:hover { background: var(--fill); }
+      .banner button:disabled { opacity: 0.6; cursor: default; }
+      .test { margin-top: 6px; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 10px; }
+      .list { flex: 1 1 auto; overflow-y: auto; padding: 0 10px 8px; display: flex; flex-direction: column; }
+      .empty { color: var(--quiet); padding: 16px 4px; text-align: center; white-space: pre-wrap; }
+      .empty code {
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        background: var(--fill);
+        padding: 0 4px;
+        border-radius: 3px;
+      }
+      .group { display: flex; flex-direction: column; padding-top: 6px; }
+      .head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-weight: 600; }
+      .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 5px; }
+      .what .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .kind {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--orca-secondary-foreground, var(--fg));
+        background: var(--orca-secondary, var(--fill));
+        border-radius: 4px;
+        padding: 0 5px;
+      }
+      /* The effort: an outline, not a fill, and smaller than the kind tag beside the name. */
+      .effort {
+        flex: 0 0 auto;
+        font-size: 9px;
+        font-weight: 400;
+        line-height: 1.3;
+        color: var(--quiet);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 0 4px;
+        white-space: nowrap;
+      }
+      .what.none { color: var(--quiet); font-weight: 400; }
+      .speed {
+        flex: 0 0 auto;
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .speed.est, .speed.none { color: var(--quiet); }
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 64px 52px;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 0 5px 8px;
+        border-top: 1px solid var(--line);
+      }
+      .name { min-width: 0; }
+      .name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* `repository/workspace`: when there is no room the repository gives way first, so
+         the workspace, the part that tells rows apart, stays readable. */
+      .name > .path { display: flex; align-items: center; }
+      .path > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .path .dot { flex: 0 0 auto; }
+      .path .repo { flex: 0 1000 auto; min-width: 0; color: var(--quiet); }
+      .path .slash { flex: 0 0 auto; color: var(--quiet); }
+      .path .ws { flex: 0 1 auto; min-width: 0; }
+      .sub { padding-left: 11px; font-size: 10px; color: var(--quiet); }
+      .dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        margin-right: 5px;
+        vertical-align: middle;
+        background: var(--quiet);
+      }
+      .dot.working { background: var(--ok); }
+      .track { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; }
+      .fill { display: block; height: 100%; background: var(--hi); }
+      .fill.warn { background: var(--warn); }
+      .fill.bad { background: var(--danger); }
+      .pct { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; white-space: nowrap; }
+      .pct.warn { color: var(--warn); }
+      .pct.bad { color: var(--danger); }
+      .pct.none { color: var(--quiet); }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <span class="title">パフォーマンス</span>
+      <span class="where" id="where"></span>
+    </div>
+    <div class="banner error" id="consent" hidden>
+      <div>Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください（開発フォルダなら orca plugin dev watch をやり直す）。それまで設定の変更が反映されません。</div>
+    </div>
+    <div class="banner error" id="error" hidden>
+      <div id="errorText"></div>
+      <button type="button" id="test">接続テスト</button>
+      <div class="test" id="testResult" hidden></div>
+    </div>
+    <div class="banner" id="notice" hidden></div>
+    <div class="list" id="list"></div>
+    <div class="foot"><span id="period"></span><span id="every"></span></div>
+
+    <script>
+      const AGENT_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi', opencode: 'OpenCode', dsh: 'DSH' }
+      const PERIOD_LABELS = { '15m': '直近15分', '1h': '直近1時間', '24h': '直近24時間' }
+      const WARN_PERCENT = 70
+      const DANGER_PERCENT = 90
+
+      const el = {
+        where: document.getElementById('where'),
+        consent: document.getElementById('consent'),
+        error: document.getElementById('error'),
+        errorText: document.getElementById('errorText'),
+        test: document.getElementById('test'),
+        testResult: document.getElementById('testResult'),
+        notice: document.getElementById('notice'),
+        list: document.getElementById('list'),
+        period: document.getElementById('period'),
+        every: document.getElementById('every')
+      }
+
+      let snapshot = null
+      let loadError = ''
+
+      function node(tag, className, text) {
+        const element = document.createElement(tag)
+        if (className) element.className = className
+        if (text !== undefined) element.textContent = text
+        return element
+      }
+
+      function level(percent) {
+        return percent >= DANGER_PERCENT ? 'bad' : percent >= WARN_PERCENT ? 'warn' : ''
+      }
+
+      function compact(tokens) {
+        if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 === 0 ? 0 : 1)}M`
+        if (tokens >= 1000) return `${Math.round(tokens / 1000)}k`
+        return String(tokens)
+      }
+
+      function ageText(at) {
+        const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
+        if (seconds < 60) return `${seconds}秒前`
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}分前`
+        return `${Math.floor(seconds / 3600)}時間前`
+      }
+
+      /**
+       * The header's right side: the target as configured. The age of the figures is
+       * said only when it means something: when the last good read is three refresh
+       * intervals old. Called when an answer arrives, so no clock has to tick for it.
+       */
+      function renderWhere() {
+        el.where.replaceChildren()
+        if (!snapshot || !snapshot.configured) return
+        el.where.title = snapshot.label || ''
+        if (snapshot.label) el.where.append(node('span', 'label', snapshot.label))
+        const stalled = snapshot.fetchedAt > 0 && Date.now() - snapshot.fetchedAt >= 3 * snapshot.refreshSeconds * 1000
+        if (stalled) el.where.append(node('span', 'stale', `更新が止まっています（${ageText(snapshot.fetchedAt)}）`))
+      }
+
+      function renderRow(row) {
+        // A row is not pressable: neither Orca's plugin API nor its CLI can switch this
+        // desktop to a workspace on the paired server.
+        const element = node('div', 'row')
+        const name = node('span', 'name')
+        const first = node('span', 'path')
+        first.append(node('span', row.working ? 'dot working' : 'dot'))
+        // The slash is its own piece, so it stays when the repository is cut short.
+        if (row.repo) first.append(node('span', 'repo', row.repo), node('span', 'slash', '/'))
+        first.append(node('span', 'ws', row.name))
+        name.append(first)
+        // Several agents share this workspace: its title, or a number, tells them apart.
+        if (row.sub) name.append(node('span', 'sub', row.sub))
+        element.append(name)
+        const where = row.repo ? `${row.repo}/${row.name}` : row.name
+        const label = row.sub ? `${where} ${row.sub}` : where
+
+        const track = node('span', 'track')
+        const percent = node('span', 'pct')
+        if (row.percent !== null) {
+          const fill = node('span', `fill ${level(row.percent)}`)
+          fill.style.width = `${Math.min(100, Math.max(0, row.percent))}%`
+          track.append(fill)
+          percent.className = `pct ${level(row.percent)}`
+          percent.textContent = `${Math.round(row.percent)}%`
+          element.title = `${label}  ${compact(row.tokens)} / ${row.windowEstimated ? '≈' : ''}${compact(row.window)}`
+        } else if (row.tokens !== null) {
+          percent.textContent = compact(row.tokens)
+          element.title = `${label}  ${compact(row.tokens)}`
+        } else {
+          percent.className = 'pct none'
+          percent.textContent = '—'
+          element.title = label
+        }
+        element.append(track, percent)
+        return element
+      }
+
+      function renderGroup(group) {
+        const element = node('div', 'group')
+        const head = node('div', 'head')
+        const what = node('span', group.model ? 'what' : 'what none')
+        what.append(node('span', 'kind', AGENT_LABELS[group.agent] ?? group.agent))
+        what.append(node('span', 'label', group.model ? (group.label ?? group.model) : 'セッション未検出'))
+        // The reasoning effort the model ran with, when the log names one.
+        if (group.model && group.effort) what.append(node('span', 'effort', group.effort))
+        if (group.model) what.title = group.effort ? `${group.model} · ${group.effort}` : group.model
+        head.append(what)
+        const speed = node('span', 'speed')
+        if (group.tokPerSec !== null) {
+          if (group.estimated) speed.className = 'speed est'
+          speed.textContent = `${group.estimated ? '≈' : ''}${Math.round(group.tokPerSec)} tok/s`
+          speed.title = `最新 ${Math.round(group.latest)} tok/s ・ ${group.samples} 件`
+        } else if (group.model) {
+          speed.className = 'speed none'
+          speed.textContent = '—'
+        }
+        head.append(speed)
+        element.append(head)
+        for (const row of group.rows) element.append(renderRow(row))
+        return element
+      }
+
+      function render() {
+        el.list.replaceChildren()
+        el.consent.hidden = !(snapshot && snapshot.consentRequired)
+        el.error.hidden = true
+        el.notice.hidden = true
+        if (!snapshot) {
+          el.period.textContent = ''
+          el.every.textContent = ''
+          el.list.append(node('div', 'empty', loadError || '読み込み中…'))
+          renderWhere()
+          return
+        }
+        el.period.textContent = PERIOD_LABELS[snapshot.period] ?? snapshot.period
+        el.every.textContent = `↻ ${snapshot.refreshSeconds}秒`
+        renderWhere()
+
+        if (!snapshot.configured) {
+          // Without approval the settings cannot be read, so "not set" may be wrong.
+          if (snapshot.consentRequired) return
+          const setup = node('div', 'empty')
+          setup.append('SSH 接続先がまだ設定されていません。\nSettings → Plugins → Agent Meter の「SSH 接続先」に\n')
+          setup.append(node('code', '', 'user@host'))
+          setup.append(' の形で入れてください。')
+          el.list.append(setup)
+          return
+        }
+        if (snapshot.error) {
+          el.errorText.textContent = snapshot.error.message
+          el.error.hidden = false
+        } else {
+          // The test belongs to the failure it was run for.
+          el.testResult.hidden = true
+        }
+        if (snapshot.notice) {
+          el.notice.textContent = snapshot.notice
+          el.notice.hidden = false
+        }
+        if (snapshot.groups.length === 0) {
+          if (!snapshot.error) el.list.append(node('div', 'empty', '稼働中のエージェントはいません'))
+          return
+        }
+        for (const group of snapshot.groups) el.list.append(renderGroup(group))
+      }
+
+      /** Everything but the clock: an unchanged answer must not rebuild the list. */
+      function contentKey(value) {
+        return JSON.stringify({ ...value, fetchedAt: 0 })
+      }
+
+      // The panel drives the reads: it asks the worker once per refresh interval while
+      // it is visible, and every ask is one read of the server. Hidden, it asks nothing,
+      // so nothing is read.
+      let timer = null
+      let loading = false
+      let forceNext = false
+
+      function schedule() {
+        clearTimeout(timer)
+        if (document.hidden) return
+        const seconds = Math.min(600, Math.max(5, Number(snapshot?.refreshSeconds) || 15))
+        timer = setTimeout(() => void load(), seconds * 1000)
+      }
+
+      async function load(force = false) {
+        if (loading) {
+          // A setting changed during a read: read once more when it is back.
+          forceNext = forceNext || force
+          return
+        }
+        loading = true
+        clearTimeout(timer)
+        let same = false
+        try {
+          const next = await orca.plugin.request('snapshot.get', { force })
+          same = snapshot !== null && loadError === '' && contentKey(next) === contentKey(snapshot)
+          snapshot = next
+          loadError = ''
+        } catch (error) {
+          loadError = String(error?.message ?? error)
+        }
+        loading = false
+        if (same) renderWhere()
+        else render()
+        if (forceNext) {
+          forceNext = false
+          void load(true)
+        } else {
+          schedule()
+        }
+      }
+
+      function seconds(ms) {
+        return `${(ms / 1000).toFixed(1)}秒`
+      }
+
+      /** The worker's connection test as lines: which step broke and what ssh said. */
+      function testLines(report) {
+        const lines = [`ssh: ${report.ssh}${report.version ? `（${report.version}）` : ''}`]
+        if (report.filledEnv.length > 0) lines.push(`補った環境変数: ${report.filledEnv.join(', ')}`)
+        for (const step of report.steps) {
+          const took = typeof step.ms === 'number' ? ` ${seconds(step.ms)}` : ''
+          lines.push(`${step.ok ? '✓' : '✗'} ${step.name}${took}${step.detail ? ` — ${step.detail}` : ''}`)
+          for (const line of step.trace ?? []) lines.push(`    ${line}`)
+        }
+        lines.push(report.ok ? 'すべて成功しました' : '詳細は orca plugin logs に出ています')
+        return lines
+      }
+
+      el.test.addEventListener('click', async () => {
+        el.test.disabled = true
+        el.testResult.hidden = false
+        el.testResult.textContent = 'テスト中…'
+        try {
+          el.testResult.textContent = testLines(await orca.plugin.request('connection.test', {})).join('\n')
+        } catch (error) {
+          el.testResult.textContent = String(error?.message ?? error)
+        }
+        el.test.disabled = false
+      })
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) clearTimeout(timer)
+        else void load()
+      })
+      if (typeof orca.settings?.onDidChange === 'function') {
+        orca.settings.onDidChange(() => void load(true))
+      }
+
+      void load()
+    </script>
+  </body>
+</html>

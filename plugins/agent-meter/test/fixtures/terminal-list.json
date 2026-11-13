@@ -1,0 +1,18 @@
+{
+  "terminals": [
+    {
+      "handle": "term_one",
+      "tabId": "tab-1",
+      "leafId": "leaf-1",
+      "title": null,
+      "worktreePath": "/work/alpha"
+    },
+    {
+      "handle": "term_three",
+      "tabId": "tab-6",
+      "leafId": "leaf-a",
+      "title": "codex: review",
+      "worktreePath": "/work/delta"
+    }
+  ]
+}
