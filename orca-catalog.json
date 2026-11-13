@@ -108,6 +108,27 @@
       ],
       "releases": [
         {
+          "version": "0.1.3",
+          "commit": "c1c39ea9dc1cb66c8297b12335af1caa997c29c3",
+          "contentHash": "036a155c0aa35fb3c8b05eb3bc9dff127d71c5058588a11efbbe7575bb02bfea",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Agent Meter",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "パフォーマンス"
+            }
+          ],
+          "capabilities": [
+            "settings:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-13",
+          "changelog": "モデルの表示名を決め打ちせず、各エージェントのモデル一覧（Codex・pi・OpenCode）の名前を使い、無ければ単語表なしの規則で整える。名前末尾の注記は控えめに出し先に省略する。DSH を Orca のエージェント一覧から拾い、他のエージェントと同じ行の形にした。"
+        },
+        {
           "version": "0.1.2",
           "commit": "ef7c307cd104b5b139c979b9395bc194334f9db8",
           "contentHash": "d29cf7aec10244a4540d36ab9c487759e4c1f3e5ca6d7a651e11331e734df8b9",
