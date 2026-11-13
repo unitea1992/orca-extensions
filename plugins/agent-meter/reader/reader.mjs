@@ -866,6 +866,40 @@ export function opencodeWindows(config) {
   return windows
 }
 
+/** The reasoning effort an options object asks for, under any of the names in use. */
+function optionsEffort(options) {
+  if (!isRecord(options)) return ''
+  const body = isRecord(options.body) ? options.body : {}
+  return (
+    cleanEffort(options.reasoningEffort) ||
+    cleanEffort(options.reasoning_effort) ||
+    cleanEffort(body.reasoning_effort) ||
+    cleanEffort(body.reasoningEffort)
+  )
+}
+
+/**
+ * `opencode.json` → the effort a request runs with when no variant is chosen:
+ * `provider/model` for a model's own options, `provider` for the provider's. OpenCode
+ * records only the variant with a message (`default` when none was picked); what
+ * `default` means is in the config, as an option sent with every request.
+ */
+export function opencodeEfforts(config) {
+  const efforts = new Map()
+  const providers = isRecord(config) && isRecord(config.provider) ? config.provider : {}
+  for (const [provider, entry] of Object.entries(providers)) {
+    if (!isRecord(entry)) continue
+    const own = optionsEffort(entry.options)
+    if (own) efforts.set(provider, own)
+    const models = isRecord(entry.models) ? entry.models : {}
+    for (const [id, model] of Object.entries(models)) {
+      const effort = isRecord(model) ? optionsEffort(model.options) : ''
+      if (effort) efforts.set(`${provider}/${id}`, effort)
+    }
+  }
+  return efforts
+}
+
 function parseColumn(value) {
   if (typeof value !== 'string') return isRecord(value) ? value : {}
   try {
@@ -881,16 +915,17 @@ function parseColumn(value) {
  *
  * OpenCode keeps reasoning tokens apart from output tokens, so both count. `streamed`
  * is when the stream ended (`completed` follows it by a fixed bookkeeping delay), so
- * the response ran from `created` to `streamed`.
+ * the response ran from `created` to `streamed`. The effort is the model's variant,
+ * or, with none chosen, what the config sends for the model or its provider.
  */
-export function opencodeMessage(row, windows = new Map()) {
+export function opencodeMessage(row, windows = new Map(), efforts = new Map()) {
   const tokens = parseColumn(row.tokens)
   const time = parseColumn(row.time)
   const model = parseColumn(row.model)
   const cache = isRecord(tokens.cache) ? tokens.cache : {}
   const id = typeof model.id === 'string' ? model.id : 'unknown'
-  // OpenCode names the effort as the model's variant; `default` is none chosen.
-  const effort = cleanEffort(model.variant)
+  const effort =
+    cleanEffort(model.variant) || efforts.get(`${model.providerID}/${id}`) || efforts.get(model.providerID) || ''
   const created = num(time.created)
   const finished = num(time.streamed) || num(time.completed)
   const generated = num(tokens.output) + num(tokens.reasoning)
@@ -940,7 +975,9 @@ async function collectOpencode(run) {
   } catch {
     return { files: 0, samples: 0, error: 'node:sqlite がありません（Node.js 22.13 以降が必要）' }
   }
-  const windows = opencodeWindows(opencodeConfig(run.env, run.home))
+  const config = opencodeConfig(run.env, run.home)
+  const windows = opencodeWindows(config)
+  const efforts = opencodeEfforts(config)
   const stats = { files: 1, samples: 0 }
   const db = new DatabaseSync(file, { readOnly: true })
   try {
@@ -951,7 +988,7 @@ async function collectOpencode(run) {
       )
       .all(run.since)
     for (const row of recent) {
-      const message = opencodeMessage(row, windows)
+      const message = opencodeMessage(row, windows, efforts)
       if (message.sample) run.samples.push(message.sample)
     }
 
@@ -975,7 +1012,7 @@ async function collectOpencode(run) {
     assign(run, 'opencode', sessions, (item) => {
       // The newest row can be a response still in flight, with no usage yet.
       for (const row of latest.all(item.id)) {
-        const message = opencodeMessage(row, windows)
+        const message = opencodeMessage(row, windows, efforts)
         if (message.context) return { ...message.context, sessionAt: item.mtime }
       }
       return null

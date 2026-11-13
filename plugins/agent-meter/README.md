@@ -8,12 +8,12 @@
 
 ```
 パフォーマンス                          user@host
-[Claude] Claude … 5.2 (high)            ≈82 tok/s
+[Claude] Claude … 5.2 [high]            ≈82 tok/s
   ● shop · checkout-flow ███████░░░        73%
   ○ docs · fix-links     ██░░░░░░░░        21%
-[Claude] Claude … 5.2 (medium)         ≈112 tok/s
+[Claude] Claude … 5.2 [medium]         ≈112 tok/s
   ○ shop · develop       █░░░░░░░░░        15%
-[Codex] GPT-… (low)                     ≈44 tok/s
+[Codex] GPT-… [low]                     ≈44 tok/s
   ● api · migration      █████████░        93%
 直近1時間                                 ↻ 15秒
 ```
@@ -83,9 +83,19 @@ Settings → Plugins → Agent Meter
 
 ## 表示の読み方
 
-- 見出しは「エージェントの種類・モデルの表示名 (effort)・tok/s」です。同じモデルでも effort（reasoning の強さ）が違えば別の見出しになり、tok/s も別に出ます。その下に、そのモデルと effort で動いている生きたエージェントが並びます
-- モデルの表示名は ID から整えます（`claude-fable-5-2` → `Claude Fable 5.2`、`gpt-5.1-codex-max` → `GPT-5.1 Codex Max`、末尾の `[1m]` は `(1M)`）。知らない形の ID はそのまま出します。見出しにホバーすると元の ID が出ます
-- effort は各エージェントのログから取ります（Claude Code の `effort`、Codex の `turn_context.effort`、OpenCode の `model.variant`、pi の `thinkingLevel`、DSH の `reasoningEffort`）。ログに無いときは括弧を付けません
+- 見出しは「エージェントの種類・モデルの表示名・effort・tok/s」です。effort（reasoning の強さ）はモデル名の右に小さな枠付きの札で出ます（`high` `medium` `low` など、ログの値のまま）。同じモデルでも effort が違えば別の見出しになり、tok/s も別に出ます。その下に、そのモデルと effort で動いている稼働中のエージェントが並びます
+- 見出しが出るのは、**稼働中のエージェントがいるモデル**だけです。期間内に速度が測れていても、いま使っているエージェントがいないモデルは出しません。1件も無いときは `稼働中のエージェントはいません` と出ます
+- モデルの表示名は ID から整えます。Claude と GPT はそれぞれの書き方に（`claude-fable-5-2` → `Claude Fable 5.2`、`gpt-5.1-codex-max` → `GPT-5.1 Codex Max`）、それ以外は `-` `_` `:` で語に分けて、知っているベンダー名は正しい大文字小文字に、`v9.1` のような版は `V9.1` に、ほかの語は先頭を大文字にします（`deepseek-v9.1-flash-eco` → `DeepSeek V9.1 Flash Eco`）。数字だけの語はそのまま、`provider/` のような接頭辞は落とし、末尾の `[1m]` は `(1M)` にします。見出しにホバーすると元の ID が出ます
+- effort は各エージェントのログから取ります。ログに無いときは札を出しません
+
+  | エージェント | effort の出どころ |
+  |---|---|
+  | Claude Code | 各応答の `effort` |
+  | Codex | `turn_context.effort` |
+  | OpenCode | 各応答の `model.variant`。OpenCode が記録するのはこれだけで、variant を選んでいないときは `default` になります。その場合は `opencode.json` がリクエストに付けている値（モデルかプロバイダの `options` の `reasoningEffort`／`reasoning_effort`／`body.reasoning_effort`）を使い、それも無ければ札なしです |
+  | pi | 各応答の `thinkingLevel` |
+  | DSH | `request/header` の `reasoningEffort` |
+
 - 行の名前は `リポジトリ名 · 作業場所名` です（Orca がリポジトリ名を返さないとき、作業場所名と同じときは作業場所名だけ）
 - 行の丸は、作業中なら緑。バーと % はコンテキスト使用率で、70% 以上で黄、90% 以上で赤になります。行にホバーすると `146k / 200k` のようにトークン数が出ます
 - 同じワークスペースにエージェントが複数いるときは、名前の下に見分けるための1行が付きます。Orca がそのエージェント（またはその端末）にタイトルを付けていればタイトル、無ければ `#1` `#2` … の番号です。番号はエージェントが生きている間変わりません

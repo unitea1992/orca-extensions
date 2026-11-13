@@ -19,6 +19,7 @@ import {
   isInternalCodexModel,
   jsonLines,
   median,
+  opencodeEfforts,
   opencodeMessage,
   opencodeWindows,
   parseClaude,
@@ -286,10 +287,40 @@ test('opencode: output plus reasoning over created to streamed', () => {
     windowEstimated: false,
     effort: 'high'
   })
-  // The child session ran with no variant chosen.
+  // The child session ran with no variant chosen: the log alone names no effort, the
+  // config says what such a request is sent with.
   assert.equal(opencodeMessage(row(messages[4]), windows).sample.effort, '')
+  const efforts = opencodeEfforts(parseJsonc(fixture('opencode/opencode.json')))
+  assert.deepEqual([...efforts], [['ocprov', 'low']])
+  assert.equal(opencodeMessage(row(messages[4]), windows, efforts).sample.effort, 'low')
+  // A chosen variant is the effort, whatever the config's default.
+  assert.equal(opencodeMessage(row(messages[1]), windows, efforts).sample.effort, 'high')
   const streaming = opencodeMessage(row(messages[3]), windows)
   assert.deepEqual(streaming, { sample: null, context: null })
+})
+
+test('opencode: where a config can name the effort of a request with no variant', () => {
+  const efforts = opencodeEfforts({
+    provider: {
+      one: { options: { reasoningEffort: 'medium' }, models: { m1: { options: { reasoning_effort: 'high' } }, m2: {} } },
+      two: { options: { body: { reasoning_effort: 'low' } } },
+      three: { options: { baseURL: 'x' }, models: { m3: { options: { body: { reasoningEffort: 'xhigh' } } } } },
+      four: 'not an object'
+    }
+  })
+  assert.deepEqual([...efforts].sort(), [
+    ['one', 'medium'],
+    ['one/m1', 'high'],
+    ['three/m3', 'xhigh'],
+    ['two', 'low']
+  ])
+  // The model's own setting comes before its provider's.
+  const row = (provider, id, variant) => ({ tokens: '{"input":1,"output":60}', time: '{"created":1,"streamed":1001}', model: JSON.stringify({ id, providerID: provider, variant }) })
+  assert.equal(opencodeMessage(row('one', 'm1', 'default'), new Map(), efforts).sample.effort, 'high')
+  assert.equal(opencodeMessage(row('one', 'm2', 'default'), new Map(), efforts).sample.effort, 'medium')
+  assert.equal(opencodeMessage(row('one', 'm2', undefined), new Map(), efforts).sample.effort, 'medium')
+  assert.equal(opencodeMessage(row('five', 'm9', 'default'), new Map(), efforts).sample.effort, '')
+  assert.deepEqual([...opencodeEfforts(null)], [])
 })
 
 // --- DSH ---------------------------------------------------------------------------
@@ -463,7 +494,9 @@ test('collect: speeds per model and a context per live agent', async () => {
         { tokPerSec: speed['opencode/oc-test-1/high'].tokPerSec, samples: speed['opencode/oc-test-1/high'].samples },
         { tokPerSec: 100, samples: 2 }
       )
-      assert.equal(speed['opencode/oc-test-1/'].tokPerSec, 100)
+      // The child session's message had no variant: it counts under the config's effort.
+      assert.equal(speed['opencode/oc-test-1/low'].tokPerSec, 100)
+      assert.equal('opencode/oc-test-1/' in speed, false)
       assert.deepEqual(
         { model: agents['o-alpha'].model, effort: agents['o-alpha'].effort, tokens: agents['o-alpha'].contextTokens, window: agents['o-alpha'].contextWindow },
         { model: 'oc-test-1', effort: 'high', tokens: 21_200, window: 200_000 }

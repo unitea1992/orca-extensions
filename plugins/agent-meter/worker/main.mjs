@@ -681,16 +681,61 @@ function capital(word) {
   return word === '' ? '' : word[0].toUpperCase() + word.slice(1)
 }
 
+/** Names whose capitals a rule cannot guess. Keys are lower case. */
+const VENDOR_NAMES = {
+  claude: 'Claude',
+  codex: 'Codex',
+  deepseek: 'DeepSeek',
+  ernie: 'ERNIE',
+  gemini: 'Gemini',
+  gemma: 'Gemma',
+  glm: 'GLM',
+  gpt: 'GPT',
+  grok: 'Grok',
+  kimi: 'Kimi',
+  llama: 'Llama',
+  minimax: 'MiniMax',
+  mistral: 'Mistral',
+  moonshot: 'Moonshot',
+  openai: 'OpenAI',
+  phi: 'Phi',
+  qwen: 'Qwen',
+  qwq: 'QwQ'
+}
+
+/** One word of a model id as it is written in a name. */
+function modelWord(word) {
+  const lower = word.toLowerCase()
+  if (Object.hasOwn(VENDOR_NAMES, lower)) return VENDOR_NAMES[lower]
+  // A version: v9.1 → V9.1.
+  if (/^v\d+(?:\.\d+)*$/.test(lower)) return `V${lower.slice(1)}`
+  // OpenAI's o-series is written small: o3.
+  if (/^o\d+$/.test(lower)) return lower
+  // A vendor with its version attached: qwen2.5 → Qwen2.5.
+  const attached = /^([a-z]+)(\d.*)$/.exec(lower)
+  if (attached && Object.hasOwn(VENDOR_NAMES, attached[1])) return `${VENDOR_NAMES[attached[1]]}${word.slice(attached[1].length)}`
+  // Anything else gets a capital and keeps the rest as written; digits stay as they are.
+  return capital(word)
+}
+
 /**
- * A model id as a name to read: `claude-fable-5-2` → `Claude Fable 5.2`,
- * `gpt-5.1-codex-max` → `GPT-5.1 Codex Max`. A bracketed suffix stays, as `(1M)`. Only shapes that
- * are known are rewritten; anything else is shown as the id it is.
+ * A model id as a name to read.
+ *
+ * - A provider in front is dropped: `provider/model` → the model.
+ * - Claude and GPT ids are written the way their makers write them:
+ *   `claude-fable-5-2` → `Claude Fable 5.2`, `gpt-5.1-codex-max` → `GPT-5.1 Codex Max`.
+ * - Any other id is split at `-`, `_` and `:` into words: a known vendor gets its own
+ *   capitals (`deepseek` → `DeepSeek`, `glm` → `GLM`), a version its `V`, other words a
+ *   first capital, and numbers stay: `deepseek-v9.1-flash-eco` →
+ *   `DeepSeek V9.1 Flash Eco`.
+ * - A bracketed suffix stays, as `(1M)`.
  */
 export function modelLabel(id) {
-  const text = String(id ?? '')
+  const text = String(id ?? '').trim()
   const bracket = /^(.*?)\[([^\]]+)\]$/.exec(text)
-  const base = bracket ? bracket[1] : text
   const suffix = bracket ? ` (${bracket[2].toUpperCase()})` : ''
+  const base = (bracket ? bracket[1] : text).replace(/^.*\//, '')
+  if (base === '') return text
   // claude-<family>-<major>[-<minor>][-<date>]
   let match = /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(base)
   if (match) return `Claude ${capital(match[1])} ${match[2]}${match[3] ? `.${match[3]}` : ''}${suffix}`
@@ -698,16 +743,21 @@ export function modelLabel(id) {
   match = /^claude-(\d{1,2})(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/.exec(base)
   if (match) return `Claude ${match[1]}${match[2] ? `.${match[2]}` : ''} ${capital(match[3])}${suffix}`
   // gpt-<version>[-<words>]
-  match = /^gpt-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(base)
+  match = /^gpt-(\d+(?:\.\d+)?[a-z]?)((?:-[a-z0-9.]+)*)$/.exec(base)
   if (match) {
-    const words = match[2].split('-').filter(Boolean).map(capital)
+    const words = match[2].split('-').filter(Boolean).map(modelWord)
     return `GPT-${match[1]}${words.length > 0 ? ` ${words.join(' ')}` : ''}${suffix}`
   }
-  return text
+  const words = base.split(/[-_:\s]+/).filter(Boolean).map(modelWord)
+  return `${words.join(' ')}${suffix}`
 }
 
-/** Reader result + Orca's agent list → groups per model and effort with their live
- *  agents. One model at two efforts is two groups: each has its own speed. */
+/**
+ * Reader result + Orca's agent list → groups per model and effort with their live
+ * agents. One model at two efforts is two groups: each has its own speed. A model that
+ * no live agent runs is left out: its speed alone, with nobody under it, is a heading
+ * for nothing.
+ */
 export function buildGroups(reader, agents = []) {
   const live = new Map(agents.map((agent) => [agent.id, agent]))
   const groups = new Map()
@@ -779,14 +829,16 @@ export function buildGroups(reader, agents = []) {
         left.sub.localeCompare(right.sub)
     )
   }
-  return list.sort(
-    (left, right) =>
-      order(left.agent) - order(right.agent) ||
-      // A kind's agents without a session come after its models.
-      Number(left.model === null) - Number(right.model === null) ||
-      String(left.model).localeCompare(String(right.model)) ||
-      left.effort.localeCompare(right.effort)
-  )
+  return list
+    .filter((group) => group.rows.length > 0)
+    .sort(
+      (left, right) =>
+        order(left.agent) - order(right.agent) ||
+        // A kind's agents without a session come after its models.
+        Number(left.model === null) - Number(right.model === null) ||
+        String(left.model).localeCompare(String(right.model)) ||
+        left.effort.localeCompare(right.effort)
+    )
 }
 
 // ---------------------------------------------------------------------------

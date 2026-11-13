@@ -250,7 +250,7 @@ writeFileSync(
         ocMessage('ses_parent', 3, 8000, 2000, ocTokens(700, 300, 0, 20_500)),
         // Still streaming: no usage yet.
         ocMessage('ses_parent', 4, 12_000, null, ocTokens(0, 0, 0, 0)),
-        // `default` is no variant chosen: no effort to show.
+        // `default` is no variant chosen: the effort is what the config sends.
         ocMessage('ses_child', 1, 25_000, 1000, ocTokens(50, 100, 0, 90_000), 'default')
       ]
     },
@@ -264,6 +264,8 @@ writeFileSync(
   // A config file may hold comments and trailing commas.
   "provider": {
     "ocprov": {
+      // Sent with every request: what a message with no variant chosen runs with.
+      "options": { "body": { "reasoning_effort": "low" } },
       "models": {
         "oc-test-1": { "limit": { "context": 200000, "output": 8000 } },
       },

@@ -474,7 +474,7 @@ function groupsOf(reader) {
   return buildGroups(reader, labelAgents(flattenAgents(fixture('worktree-ps.json')), titles))
 }
 
-test('model names: known shapes are written out, the rest stay ids', () => {
+test('model names: Claude and GPT ids as their makers write them', () => {
   assert.equal(modelLabel('claude-fable-5-2'), 'Claude Fable 5.2')
   assert.equal(modelLabel('claude-opus-5-5'), 'Claude Opus 5.5')
   assert.equal(modelLabel('claude-opus-4'), 'Claude Opus 4')
@@ -484,12 +484,36 @@ test('model names: known shapes are written out, the rest stay ids', () => {
   assert.equal(modelLabel('claude-fable-5-2[1m]'), 'Claude Fable 5.2 (1M)')
   assert.equal(modelLabel('gpt-6-test'), 'GPT-6 Test')
   assert.equal(modelLabel('gpt-5.1-codex-max'), 'GPT-5.1 Codex Max')
+  assert.equal(modelLabel('gpt-4o-mini'), 'GPT-4o Mini')
   assert.equal(modelLabel('gpt-6'), 'GPT-6')
-  // Shapes nobody told us about are shown as they are.
-  for (const id of ['local-test-1', 'DeepThought-V9-Flash-0101', 'o9-mini', 'claude-next', 'provider/model:tag', '']) {
-    assert.equal(modelLabel(id), id)
+})
+
+test('model names: any other id is split into words, vendors and versions capitalized', () => {
+  assert.equal(modelLabel('deepseek-v9.1-flash-eco'), 'DeepSeek V9.1 Flash Eco')
+  // Capitals already there are kept, and a trailing number stays a number.
+  assert.equal(modelLabel('DeepSeek-V9.1-Flash-0101'), 'DeepSeek V9.1 Flash 0101')
+  for (const [id, name] of [
+    ['glm-5', 'GLM 5'],
+    ['kimi-k3', 'Kimi K3'],
+    ['qwen3-coder-plus', 'Qwen3 Coder Plus'],
+    ['qwen2.5-coder:32b', 'Qwen2.5 Coder 32b'],
+    ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
+    ['grok-4-fast', 'Grok 4 Fast'],
+    ['mistral-large-latest', 'Mistral Large Latest'],
+    ['llama-3.3-70b', 'Llama 3.3 70b'],
+    ['o3-mini', 'o3 Mini'],
+    ['local_test_1', 'Local Test 1'],
+    ['claude-next', 'Claude Next'],
+    ['some-model[beta]', 'Some Model (BETA)']
+  ]) {
+    assert.equal(modelLabel(id), name)
   }
-  assert.equal(modelLabel('local-test-1[beta]'), 'local-test-1[beta]')
+  // A provider in front is not part of the model's name.
+  assert.equal(modelLabel('openrouter/deepseek/deepseek-v9.1-flash'), 'DeepSeek V9.1 Flash')
+  assert.equal(modelLabel('provider/claude-fable-5-2'), 'Claude Fable 5.2')
+  assert.equal(modelLabel('provider/gpt-6-test[1m]'), 'GPT-6 Test (1M)')
+  assert.equal(modelLabel(''), '')
+  assert.equal(modelLabel('provider/'), 'provider/')
 })
 
 test('groups: per model and effort, kinds in a fixed order, agents under theirs', () => {
@@ -502,9 +526,10 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
       ['claude', 'Claude Test 5.2', 'medium', 110, [['delta · develop', '#2']]],
       ['claude', null, '', null, [['none', '']]],
       ['codex', 'GPT-6 Test', 'high', 40, [['alpha-repo · alpha', '#1']]],
+      // An agent whose effort had no measured response in the period still has its heading.
       ['codex', 'GPT-6 Test', 'low', null, [['delta · develop', 'codex: review']]],
-      ['pi', 'local-test-1', '', 120, []],
-      ['dsh', 'dsh-test-1', '', null, [['gamma', '']]]
+      // pi's model has a speed but no live agent runs it: no heading for it.
+      ['dsh', 'Dsh Test 1', '', null, [['gamma', '']]]
     ]
   )
   // The id stays next to the name, for the tooltip.
@@ -516,9 +541,14 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
   )
   assert.deepEqual({ working: beta.working, percent: beta.percent }, { working: false, percent: 18 })
   // No window known: tokens only.
-  assert.deepEqual({ tokens: groups[6].rows[0].tokens, percent: groups[6].rows[0].percent }, { tokens: 9000, percent: null })
+  assert.deepEqual({ tokens: groups[5].rows[0].tokens, percent: groups[5].rows[0].percent }, { tokens: 9000, percent: null })
   // A row holds what is shown and nothing to act on: rows cannot be pressed.
   assert.deepEqual(Object.keys(alpha).sort(), ['id', 'name', 'percent', 'state', 'sub', 'tokens', 'window', 'windowEstimated', 'working'])
+})
+
+test('groups: speeds alone, with no live agent, show nothing', () => {
+  assert.deepEqual(buildGroups({ models: READER.models, agents: [] }), [])
+  assert.deepEqual(buildGroups({}), [])
 })
 
 test('groups: sessions Orca does not list are numbered by their own key', () => {

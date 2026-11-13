@@ -109,16 +109,28 @@
       }
       .group { display: flex; flex-direction: column; padding-top: 6px; }
       .head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; font-weight: 600; }
-      .what { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .what { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 5px; }
+      .what .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .kind {
-        display: inline-block;
+        flex: 0 0 auto;
         font-size: 10px;
         font-weight: 500;
         color: var(--orca-secondary-foreground, var(--fg));
         background: var(--orca-secondary, var(--fill));
         border-radius: 4px;
         padding: 0 5px;
-        margin-right: 5px;
+      }
+      /* The effort: an outline, not a fill, and smaller than the kind tag beside the name. */
+      .effort {
+        flex: 0 0 auto;
+        font-size: 9px;
+        font-weight: 400;
+        line-height: 1.3;
+        color: var(--quiet);
+        border: 1px solid var(--line);
+        border-radius: 3px;
+        padding: 0 4px;
+        white-space: nowrap;
       }
       .what.none { color: var(--quiet); font-weight: 400; }
       .speed {
@@ -276,9 +288,10 @@
         const head = node('div', 'head')
         const what = node('span', group.model ? 'what' : 'what none')
         what.append(node('span', 'kind', AGENT_LABELS[group.agent] ?? group.agent))
-        // The model by name, then the reasoning effort it ran with when the log names one.
-        what.append(group.model ? `${group.label ?? group.model}${group.effort ? ` (${group.effort})` : ''}` : 'セッション未検出')
-        if (group.model) what.title = group.model
+        what.append(node('span', 'label', group.model ? (group.label ?? group.model) : 'セッション未検出'))
+        // The reasoning effort the model ran with, when the log names one.
+        if (group.model && group.effort) what.append(node('span', 'effort', group.effort))
+        if (group.model) what.title = group.effort ? `${group.model} · ${group.effort}` : group.model
         head.append(what)
         const speed = node('span', 'speed')
         if (group.tokPerSec !== null) {
@@ -333,7 +346,7 @@
           el.notice.hidden = false
         }
         if (snapshot.groups.length === 0) {
-          if (!snapshot.error) el.list.append(node('div', 'empty', 'この期間に動いたエージェントはありません'))
+          if (!snapshot.error) el.list.append(node('div', 'empty', '稼働中のエージェントはいません'))
           return
         }
         for (const group of snapshot.groups) el.list.append(renderGroup(group))
