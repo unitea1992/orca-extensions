@@ -23,7 +23,7 @@ orca plugin dev watch C:\Users\<you>\orca-extensions\gate-inbox
 
 ```text
 activate host-api 1.6 granted=settings:own,storage:own,notifications:show
-state env=kthin-dev runs=1 gates=2 errors=0
+state env=my-server runs=1 gates=2 errors=0
 ```
 
 `state` の行は内容が変わったときだけ出ます（`runs` は確認待ちのある Run の数）。
