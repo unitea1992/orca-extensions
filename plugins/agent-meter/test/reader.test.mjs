@@ -338,8 +338,8 @@ test('dsh: token fields and compact stream records', () => {
     cacheWrite: 0
   })
   assert.deepEqual(
-    dshTokens({ inputTokens: 500, outputTokens: 120, reasoningTokens: 40, cacheReadTokens: 300 }),
-    { input: 500, output: 120, think: 0, cacheRead: 0, cacheWrite: 0 }
+    dshTokens({ inputTokens: 500, outputTokens: 120, reasoningTokens: 40, cacheReadTokens: 300, cacheWriteTokens: 7 }),
+    { input: 500, output: 120, think: 0, cacheRead: 300, cacheWrite: 7 }
   )
   assert.equal(dshTokens({ inputTokens: 0, outputTokens: 0, totalTokens: 0 }), null)
   assert.equal(dshStreamEnd([{ type: 'text-chunks', time0: 100, dt: [10, 20], texts: ['a', 'b', 'c'] }]), 130)
@@ -366,6 +366,30 @@ test('dsh: request/context to the end of the stream, think added to output', () 
     effort: 'max'
   })
   assert.deepEqual({ model, window }, { model: 'dsh-test-1', window: 128_000 })
+})
+
+test('dsh: dsh-tui log with *Tokens usage and a /model switch', () => {
+  const lines = [
+    { type: 'session', version: 4, id: 'tui', createdAt: T0, cwd: '/work/delta', isSeeded: false, delegationDepth: 0 },
+    { type: 'model/selection', seq: 1, time: T0, data: { provider: 'p1', model: 'old-model', reasoningEffort: 'low' } },
+    { type: 'model/selection', seq: 2, time: T0 + 10, data: { provider: 'p2', model: 'new-model' } },
+    { type: 'model/selection', seq: 3, time: T0 + 20, data: { provider: 'p2', model: 'new-model', reasoningEffort: 'high' } },
+    { type: 'step/start', seq: 4, time: T0 + 1000, data: { turn: 1, step: 1 } },
+    { type: 'request/header', seq: 5, time: T0 + 1010, data: { header: { config: { provider: 'p2', model: 'new-model', reasoningEffort: 'high' } }, reason: 'initial' } },
+    { type: 'request/context', seq: 6, time: T0 + 1020, data: { provider: 'p2', model: 'new-model', contextWindow: 200_000 } },
+    { type: 'assistant/message', seq: 7, time: T0 + 5020, data: { usage: { inputTokens: 30_000, outputTokens: 4000, totalTokens: 34_000 }, stream: [{ type: 'chunk', time: T0 + 5020, chunk: {} }] } },
+    { type: 'step/start', seq: 8, time: T0 + 6000, data: { turn: 1, step: 2 } },
+    { type: 'assistant/message', seq: 9, time: T0 + 8000, data: { usage: { inputTokens: 1000, outputTokens: 200, totalTokens: 35_200, cacheReadTokens: 34_000 }, stream: [{ type: 'chunk', time: T0 + 8000, chunk: {} }] } }
+  ]
+  const { samples, context, model, effort } = parseDsh(lines.map((line) => JSON.stringify(line)).join('\n'))
+  assert.deepEqual({ model, effort }, { model: 'new-model', effort: 'high' })
+  assert.deepEqual(samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, model: entry.model, effort: entry.effort })), [
+    { tokens: 4000, ms: 4000, model: 'new-model', effort: 'high' },
+    { tokens: 200, ms: 2000, model: 'new-model', effort: 'high' }
+  ])
+  // Uncached input plus what the cache served: the whole prompt of the last request.
+  assert.equal(context.tokens, 35_000)
+  assert.equal(context.window, 200_000)
 })
 
 // --- the whole run, against a home directory built from the fixtures ---------------
