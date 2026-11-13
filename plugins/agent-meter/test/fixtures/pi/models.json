@@ -1,0 +1,15 @@
+{
+  "providers": {
+    "testprov": {
+      "api": "fixture",
+      "models": [
+        {
+          "id": "local-test-1",
+          "name": "Fixture",
+          "contextWindow": 100000,
+          "maxTokens": 8000
+        }
+      ]
+    }
+  }
+}

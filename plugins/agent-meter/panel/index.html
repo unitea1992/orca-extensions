@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>パフォーマンス</title>
+    <style>
+      /* Orca sets --orca-* from the active theme and a `light` or `dark` class on <html>.
+         The fallbacks only show outside Orca. */
+      :root {
+        color-scheme: light dark;
+        --fb-fg: #e6e6e6;
+        --fb-bg: #1b1b1b;
+        --fb-quiet: #9a9a9a;
+        --fb-line: #333;
+        --fb-fill: #2a2a2a;
+        --fb-hi: #6aa9ff;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+      }
+      html.light {
+        --fb-fg: #1f2328;
+        --fb-bg: #ffffff;
+        --fb-quiet: #656d76;
+        --fb-line: #d0d7de;
+        --fb-fill: #f0f2f4;
+        --fb-hi: #0969da;
+        --ok: #1a7f37;
+        --warn: #9a6700;
+        --bad: #cf222e;
+      }
+      :root {
+        --fg: var(--orca-foreground, var(--fb-fg));
+        --bg: var(--orca-background, var(--fb-bg));
+        --quiet: var(--orca-muted-foreground, var(--fb-quiet));
+        --line: var(--orca-border, var(--fb-line));
+        --fill: var(--orca-accent, var(--fb-fill));
+        --track: var(--orca-muted, var(--fb-fill));
+        --hi: var(--orca-primary, var(--fb-hi));
+        --danger: var(--orca-destructive, var(--bad));
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 12px/1.5 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .bar, .foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px;
+        flex: 0 0 auto;
+        color: var(--quiet);
+        font-size: 11px;
+      }
+      .bar { border-bottom: 1px solid var(--line); }
+      .foot { border-top: 1px solid var(--line); font-size: 10px; }
+      .target {
+        flex: 1 1 auto;
+        min-width: 0;
+        color: var(--fg);
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .age { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+      .banner {
+        margin: 8px 8px 0;
+        padding: 6px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--quiet);
+        font-size: 11px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .banner.error { border-color: var(--warn); color: var(--fg); }
+      .list { flex: 1 1 auto; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 12px; }
+      .empty { color: var(--quiet); padding: 16px 4px; text-align: center; white-space: pre-wrap; }
+      .empty code {
+        font-family: ui-monospace, "SF Mono", Consolas, monospace;
+        background: var(--fill);
+        padding: 0 4px;
+        border-radius: 3px;
+      }
+      .group { display: flex; flex-direction: column; gap: 2px; }
+      .head { display: flex; align-items: baseline; gap: 6px; padding: 2px 4px; }
+      .kind {
+        flex: 0 0 auto;
+        font-size: 10px;
+        color: var(--quiet);
+        background: var(--fill);
+        border-radius: 999px;
+        padding: 0 7px;
+        white-space: nowrap;
+      }
+      .model {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-weight: 600;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .model.none { color: var(--quiet); font-weight: 400; }
+      .speed { flex: 0 0 auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .speed b { font-weight: 600; }
+      .speed span { color: var(--quiet); font-size: 10px; margin-left: 2px; }
+      .row {
+        display: grid;
+        grid-template-columns: 8px minmax(0, 1fr) minmax(48px, 38%) 44px;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 3px 4px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+      }
+      button.row { cursor: pointer; }
+      button.row:hover { background: var(--fill); }
+      button.row:focus-visible { outline: 1px solid var(--orca-ring, var(--hi)); }
+      .dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--quiet); }
+      .dot.working { background: var(--ok); border-color: var(--ok); }
+      .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .track { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+      .fill { height: 100%; border-radius: 3px; background: var(--hi); }
+      .fill.warn { background: var(--warn); }
+      .fill.bad { background: var(--danger); }
+      .pct { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .pct.warn { color: var(--warn); }
+      .pct.bad { color: var(--danger); }
+      .pct.none { color: var(--quiet); }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <span class="target" id="target"></span>
+      <span class="age" id="age"></span>
+    </div>
+    <div class="banner error" id="error" hidden></div>
+    <div class="banner" id="notice" hidden></div>
+    <div class="list" id="list"></div>
+    <div class="foot" id="foot"></div>
+
+    <script>
+      const AGENT_LABELS = { claude: 'Claude', codex: 'Codex', pi: 'pi', opencode: 'OpenCode', dsh: 'DSH' }
+      const PERIOD_LABELS = { '15m': '直近15分', '1h': '直近1時間', '24h': '直近24時間' }
+      const WARN_PERCENT = 70
+      const DANGER_PERCENT = 90
+      /** While visible the panel asks again this often, which also tells the worker a
+       *  panel is open (it polls for a hidden status bar only then). */
+      const HEARTBEAT_MS = 20_000
+
+      const el = {
+        target: document.getElementById('target'),
+        age: document.getElementById('age'),
+        error: document.getElementById('error'),
+        notice: document.getElementById('notice'),
+        list: document.getElementById('list'),
+        foot: document.getElementById('foot')
+      }
+
+      let snapshot = null
+      let loadError = ''
+
+      function node(tag, className, text) {
+        const element = document.createElement(tag)
+        if (className) element.className = className
+        if (text !== undefined) element.textContent = text
+        return element
+      }
+
+      function level(percent) {
+        return percent >= DANGER_PERCENT ? 'bad' : percent >= WARN_PERCENT ? 'warn' : ''
+      }
+
+      function compact(tokens) {
+        if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens % 1_000_000 === 0 ? 0 : 1)}M`
+        if (tokens >= 1000) return `${Math.round(tokens / 1000)}k`
+        return String(tokens)
+      }
+
+      function ageText(at) {
+        const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
+        if (seconds < 60) return `${seconds}秒前`
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}分前`
+        return `${Math.floor(seconds / 3600)}時間前`
+      }
+
+      function renderAge() {
+        el.age.textContent = snapshot && snapshot.configured && snapshot.fetchedAt ? ageText(snapshot.fetchedAt) : ''
+      }
+
+      function renderRow(row) {
+        const element = node(row.focusable ? 'button' : 'div', 'row')
+        if (row.focusable) {
+          element.type = 'button'
+          element.addEventListener('click', () => {
+            void orca.plugin.request('agent.focus', { id: row.id }).catch((error) => {
+              el.notice.textContent = String(error?.message ?? error)
+              el.notice.hidden = false
+            })
+          })
+        }
+        element.append(node('span', row.working ? 'dot working' : 'dot'))
+        element.append(node('span', 'name', row.name))
+
+        const track = node('span', 'track')
+        const percent = node('span', 'pct')
+        if (row.percent !== null) {
+          const fill = node('span', `fill ${level(row.percent)}`)
+          fill.style.display = 'block'
+          fill.style.width = `${Math.min(100, Math.max(0, row.percent))}%`
+          track.append(fill)
+          percent.className = `pct ${level(row.percent)}`
+          percent.textContent = `${row.windowEstimated ? '≈' : ''}${Math.round(row.percent)}%`
+          element.title = `${row.name}  ${compact(row.tokens)} / ${compact(row.window)}`
+        } else if (row.tokens !== null) {
+          percent.textContent = compact(row.tokens)
+          element.title = `${row.name}  ${compact(row.tokens)}`
+        } else {
+          percent.className = 'pct none'
+          percent.textContent = '—'
+          element.title = row.name
+        }
+        element.append(track, percent)
+        return element
+      }
+
+      function renderGroup(group) {
+        const element = node('div', 'group')
+        const head = node('div', 'head')
+        head.append(node('span', 'kind', AGENT_LABELS[group.agent] ?? group.agent))
+        head.append(node('span', group.model ? 'model' : 'model none', group.model ?? 'セッション未検出'))
+        const speed = node('span', 'speed')
+        if (group.tokPerSec !== null) {
+          speed.append(node('b', '', `${group.estimated ? '≈' : ''}${Math.round(group.tokPerSec)}`))
+          speed.append(node('span', '', 'tok/s'))
+          speed.title = `最新 ${Math.round(group.latest)} tok/s ・ ${group.samples} 件`
+        } else if (group.model) {
+          speed.append(node('span', '', '—'))
+        }
+        head.append(speed)
+        element.append(head)
+        for (const row of group.rows) element.append(renderRow(row))
+        return element
+      }
+
+      function render() {
+        el.list.replaceChildren()
+        el.error.hidden = true
+        el.notice.hidden = true
+        if (!snapshot) {
+          el.target.textContent = ''
+          el.foot.textContent = ''
+          el.list.append(node('div', 'empty', loadError || '読み込み中…'))
+          renderAge()
+          return
+        }
+        el.target.textContent = snapshot.label || ''
+        el.target.title = snapshot.label || ''
+        el.foot.textContent = `${PERIOD_LABELS[snapshot.period] ?? snapshot.period} ・ ${snapshot.refreshSeconds}秒ごとに更新`
+        renderAge()
+
+        if (!snapshot.configured) {
+          const setup = node('div', 'empty')
+          setup.append('SSH 接続先がまだ設定されていません。\nSettings → Plugins → Agent Meter の「SSH 接続先」に\n')
+          setup.append(node('code', '', 'user@host'))
+          setup.append(' の形で入れてください。')
+          el.list.append(setup)
+          return
+        }
+        if (snapshot.error) {
+          el.error.textContent = snapshot.error.message
+          el.error.hidden = false
+        }
+        if (snapshot.notice) {
+          el.notice.textContent = snapshot.notice
+          el.notice.hidden = false
+        }
+        if (snapshot.groups.length === 0) {
+          if (!snapshot.error) el.list.append(node('div', 'empty', 'この期間に動いたエージェントはありません'))
+          return
+        }
+        for (const group of snapshot.groups) el.list.append(renderGroup(group))
+      }
+
+      /** Everything but the clock: an unchanged answer must not rebuild the list. */
+      function contentKey(value) {
+        return JSON.stringify({ ...value, fetchedAt: 0 })
+      }
+
+      async function load() {
+        try {
+          const next = await orca.plugin.request('snapshot.get', {})
+          const same = snapshot !== null && loadError === '' && contentKey(next) === contentKey(snapshot)
+          snapshot = next
+          loadError = ''
+          if (same) {
+            renderAge()
+            return
+          }
+        } catch (error) {
+          loadError = String(error?.message ?? error)
+        }
+        render()
+      }
+
+      orca.plugin.on('snapshot', (next) => {
+        snapshot = next
+        loadError = ''
+        render()
+      })
+      orca.plugin.on('tick', ({ fetchedAt }) => {
+        if (!snapshot) return
+        snapshot.fetchedAt = fetchedAt
+        renderAge()
+      })
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) void load()
+      })
+      setInterval(renderAge, 1000)
+      setInterval(() => {
+        if (!document.hidden) void load()
+      }, HEARTBEAT_MS)
+
+      void load()
+    </script>
+  </body>
+</html>

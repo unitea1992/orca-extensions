@@ -1,0 +1,2 @@
+{"type":"user","uuid":"su1","parentUuid":null,"timestamp":"2026-01-15T10:01:00.000Z","isSidechain":true,"message":{"role":"user","content":"fixture prompt"}}
+{"type":"assistant","uuid":"sa1","parentUuid":"su1","timestamp":"2026-01-15T10:01:02.000Z","isSidechain":true,"sessionId":"sess-main","message":{"id":"msg_sub_1","model":"claude-test-mini","role":"assistant","content":[{"type":"text"}],"stop_reason":"end_turn","usage":{"input_tokens":8,"output_tokens":300,"cache_read_input_tokens":9000,"cache_creation_input_tokens":0}}}

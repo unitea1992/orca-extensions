@@ -1,0 +1,109 @@
+{
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "agent-meter",
+  "name": "Agent Meter",
+  "version": "0.1.0",
+  "description": "リモートの Orca サーバーで動くコーディングエージェントの、モデル別の出力速度（tok/s）とエージェント別のコンテキスト使用率を、ステータスバーと右サイドバーに出す。",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "main": "worker/main.mjs",
+  "pluginApi": 1,
+  "capabilities": [
+    {
+      "kind": "settings:own"
+    }
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "meter",
+        "title": "パフォーマンス",
+        "icon": "gauge",
+        "entry": "panel/index.html",
+        "ui": "html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "agentMeter.toggleSidebar",
+        "title": "Agent Meter: 右サイドバーを開閉",
+        "action": "sidebar.right.toggle"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "meter",
+        "text": "⚡ —",
+        "tone": "neutral",
+        "tooltip": "Agent Meter: 読み込み中",
+        "command": "agentMeter.toggleSidebar"
+      }
+    ],
+    "settings": [
+      {
+        "key": "displayMode",
+        "title": "表示",
+        "description": "ステータスバーに出すか、パネルだけにするか。パネルだけのときは、パネルを開いている間だけサーバーを読む。",
+        "type": "string",
+        "default": "statusbar",
+        "enum": ["statusbar", "panel"],
+        "enumLabels": ["ステータスバー＋パネル", "パネルのみ"]
+      },
+      {
+        "key": "sshTarget",
+        "title": "SSH 接続先",
+        "description": "エージェントが動いているサーバー。user@host か、~/.ssh/config の Host 名。パスワードなし（鍵）で入れること。",
+        "type": "string",
+        "default": "",
+        "placeholder": "user@host",
+        "maxLength": 255
+      },
+      {
+        "key": "identityFile",
+        "title": "秘密鍵（任意）",
+        "description": "ssh -i に渡す鍵のパス。空なら ~/.ssh/config と既定の鍵を使う。",
+        "type": "string",
+        "default": "",
+        "placeholder": "~/.ssh/id_ed25519",
+        "maxLength": 1024
+      },
+      {
+        "key": "remoteNode",
+        "title": "リモートの node（任意）",
+        "description": "サーバー側の node のパス。空なら PATH と mise / volta / nvm などの定位置から探す。",
+        "type": "string",
+        "default": "",
+        "placeholder": "/usr/local/bin/node",
+        "maxLength": 1024
+      },
+      {
+        "key": "environment",
+        "title": "Orca サーバー",
+        "description": "エージェント一覧を読むペアリング先の名前か id。空なら保存済みの最初の環境を使う。",
+        "type": "string",
+        "default": ""
+      },
+      {
+        "key": "period",
+        "title": "集計期間",
+        "description": "tok/s の中央値を取る期間。",
+        "type": "string",
+        "default": "1h",
+        "enum": ["15m", "1h", "24h"],
+        "enumLabels": ["直近15分", "直近1時間", "直近24時間"]
+      },
+      {
+        "key": "refreshSeconds",
+        "title": "更新間隔（秒）",
+        "description": "サーバーを読み直す間隔。1回ごとに SSH 接続を1本張る。",
+        "type": "integer",
+        "default": 15,
+        "minimum": 5,
+        "maximum": 600
+      }
+    ]
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "worktrees": [
+    {
+      "path": "/work/alpha",
+      "displayName": "alpha",
+      "agents": [
+        {
+          "paneKey": "tab-1:leaf-1",
+          "agentType": "claude",
+          "state": "working",
+          "updatedAt": 1768471205000,
+          "children": []
+        },
+        {
+          "paneKey": "structured-agent-session-1:pane-1",
+          "agentType": "codex",
+          "state": "done",
+          "updatedAt": 1768471204000
+        },
+        {
+          "paneKey": "tab-9:leaf-9",
+          "agentType": "other-agent",
+          "state": "working",
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
+      "path": "/work/beta",
+      "displayName": "",
+      "agents": [
+        {
+          "paneKey": "tab-2:leaf-2",
+          "agentType": "pi",
+          "state": "idle",
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
+      "path": "/work/empty",
+      "displayName": "empty",
+      "agents": []
+    }
+  ],
+  "totalCount": 3,
+  "truncated": false
+}
