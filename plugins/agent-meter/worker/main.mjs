@@ -15,7 +15,7 @@
 
 import { exec, execFile, spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join, win32 } from 'node:path'
 
 const CLI = process.platform === 'win32' ? 'orca.cmd' : 'orca'
@@ -70,7 +70,7 @@ export function checkTarget(target) {
  * up in rc files), so the body looks in the usual places. Paths are relative to the
  * home directory the session starts in, which keeps `$HOME` out of unquoted words.
  */
-export function buildBootstrap(remoteNode = '') {
+export function buildBootstrap(remoteNode = '', nodeArgs = '--input-type=module - --json') {
   let preset = ''
   const configured = String(remoteNode).trim()
   if (configured) {
@@ -93,7 +93,7 @@ export function buildBootstrap(remoteNode = '') {
       '; do [ ${n:-0} = 0 ] || break; [ -x $c ] && n=$c; done',
     `[ \${n:-0} = 0 ] && { echo ${NODE_MISSING} >&2; exit 127; }`,
     `[ -x $n ] || command -v $n >/dev/null 2>&1 || { echo ${NODE_MISSING} >&2; exit 127; }`,
-    'exec $n --input-type=module - --json'
+    `exec $n ${nodeArgs}`
   ].join('; ')
   return `sh -c '${body}'`
 }
@@ -104,43 +104,121 @@ function expandHome(file) {
   return file
 }
 
-export function buildSshArgs({ sshTarget, identityFile = '', remoteNode = '' }) {
-  const args = ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+/**
+ * The arguments for one ssh run of `command` on the configured target.
+ *
+ * Nothing here holds a double quote or a newline, and only an identity path can hold a
+ * backslash, so the one quoting pass Node does on Windows (wrap a word with spaces in
+ * double quotes) hands ssh.exe exactly these words. The target cannot start with `-`
+ * (checkTarget), so no `--` is needed in front of it.
+ */
+export function buildSshArgs({ sshTarget, identityFile = '', remoteNode = '' }, command, extra = []) {
+  const args = [...extra, '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
   const identity = String(identityFile).trim()
   if (identity) args.push('-i', expandHome(identity))
-  args.push('--', checkTarget(String(sshTarget).trim()), buildBootstrap(remoteNode))
+  args.push(checkTarget(String(sshTarget).trim()), command ?? buildBootstrap(remoteNode))
   return args
 }
 
-/** Orca starts a plugin worker with a reduced environment. ssh finds ~/.ssh/config and
- *  the keys through the home directory, and the orca CLI finds its saved environments
- *  the same way, so restore what is missing. */
-export function childEnv(base = process.env, platform = process.platform) {
-  const env = { ...base }
-  if (!env.HOME) env.HOME = homedir()
-  if (platform !== 'win32' && !env.PATH) env.PATH = '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin'
-  if (platform === 'win32') {
-    if (!env.USERPROFILE) env.USERPROFILE = homedir()
-    if (!env.APPDATA) env.APPDATA = join(homedir(), 'AppData', 'Roaming')
-    if (!env.LOCALAPPDATA) env.LOCALAPPDATA = join(homedir(), 'AppData', 'Local')
-    // Winsock does not start without it.
-    if (!env.SystemRoot && !env.SYSTEMROOT) env.SystemRoot = 'C:\\Windows'
+function envName(env, name) {
+  const wanted = name.toUpperCase()
+  return Object.keys(env).find((key) => key.toUpperCase() === wanted)
+}
+
+function userName() {
+  try {
+    return userInfo().username
+  } catch {
+    return ''
   }
+}
+
+/**
+ * The environment for ssh and the orca CLI.
+ *
+ * Orca starts a plugin worker with a reduced environment, and what a child process
+ * inherits from it is not what the same command sees in a terminal. On Windows that
+ * matters to ssh.exe: OpenSSH for Windows reads `ProgramData` first thing at startup
+ * (`init_prog_paths`) and, when it is missing, ends with exit code 255 before its
+ * stderr is set up, so without a word. Winsock in turn needs `SystemRoot`. So the
+ * variables a normal Windows session always has are restored here when absent; ones
+ * that are present are never changed. Names are matched without regard to case, as
+ * Windows does.
+ */
+export function childEnv(base = process.env, platform = process.platform, home = homedir()) {
+  const env = { ...base }
+  if (platform !== 'win32') {
+    if (!env.HOME) env.HOME = home
+    if (!env.PATH) env.PATH = '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin'
+    return env
+  }
+  const get = (name) => {
+    const key = envName(env, name)
+    return key === undefined ? '' : String(env[key] ?? '')
+  }
+  const fill = (name, value) => {
+    if (!get(name) && value) env[envName(env, name) ?? name] = value
+  }
+  fill('SystemRoot', 'C:\\Windows')
+  const root = get('SystemRoot')
+  const drive = /^[A-Za-z]:/.test(root) ? root.slice(0, 2) : 'C:'
+  const system32 = win32.join(root, 'System32')
+  fill('SystemDrive', drive)
+  fill('windir', root)
+  fill('ComSpec', win32.join(system32, 'cmd.exe'))
+  fill('PATHEXT', '.COM;.EXE;.BAT;.CMD')
+  fill('ProgramData', `${drive}\\ProgramData`)
+  fill('ALLUSERSPROFILE', get('ProgramData'))
+  fill('USERPROFILE', home)
+  fill('HOME', home)
+  if (/^[A-Za-z]:/.test(home)) {
+    fill('HOMEDRIVE', home.slice(0, 2))
+    fill('HOMEPATH', home.slice(2) || '\\')
+  }
+  fill('APPDATA', win32.join(home, 'AppData', 'Roaming'))
+  fill('LOCALAPPDATA', win32.join(home, 'AppData', 'Local'))
+  fill('TEMP', win32.join(get('LOCALAPPDATA'), 'Temp'))
+  fill('TMP', get('TEMP'))
+  fill('USERNAME', userName())
+  fill(
+    'PATH',
+    [
+      system32,
+      root,
+      win32.join(system32, 'Wbem'),
+      win32.join(system32, 'WindowsPowerShell', 'v1.0'),
+      win32.join(system32, 'OpenSSH')
+    ].join(win32.delimiter)
+  )
   return env
 }
 
-/** On Windows spawn does not search PATH the way a shell does for a bare name when the
- *  environment was reduced, so name the OpenSSH client outright. */
+/** The variables `childEnv` had to add: what the worker's own environment lacks. */
+export function filledEnv(base = process.env, platform = process.platform, home = homedir()) {
+  const before = new Set(
+    Object.keys(base)
+      .filter((key) => base[key])
+      .map((key) => (platform === 'win32' ? key.toUpperCase() : key))
+  )
+  return Object.keys(childEnv(base, platform, home))
+    .filter((key) => !before.has(platform === 'win32' ? key.toUpperCase() : key))
+    .sort()
+}
+
+/** On Windows the first ssh.exe on PATH, as a terminal would pick, else the OpenSSH
+ *  client that ships with Windows. Named outright so the log can say which one ran. */
 export function resolveSsh(env = process.env, platform = process.platform, exists = existsSync) {
   if (platform !== 'win32') return 'ssh'
-  const dirs = String(env.PATH ?? env.Path ?? '')
+  const pathKey = envName(env, 'PATH')
+  const dirs = String(pathKey === undefined ? '' : env[pathKey])
     .split(win32.delimiter)
     .filter(Boolean)
   for (const dir of dirs) {
     const candidate = win32.join(dir, 'ssh.exe')
     if (exists(candidate)) return candidate
   }
-  const root = env.SystemRoot ?? env.SYSTEMROOT ?? 'C:\\Windows'
+  const rootKey = envName(env, 'SystemRoot')
+  const root = (rootKey === undefined ? '' : env[rootKey]) || 'C:\\Windows'
   const bundled = win32.join(root, 'System32', 'OpenSSH', 'ssh.exe')
   return exists(bundled) ? bundled : 'ssh.exe'
 }
@@ -160,16 +238,30 @@ export function parseReaderOutput(stdout) {
   return null
 }
 
-function lastLine(text) {
-  const lines = String(text)
+/** The last `count` lines that say something, each cut to a readable length. */
+export function tailLines(text, count, width = 200) {
+  return String(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !/ExperimentalWarning|--trace-warnings/.test(line))
-  return lines.length > 0 ? lines[lines.length - 1].slice(0, 200) : ''
+    .slice(-count)
+    .map((line) => (line.length > width ? `${line.slice(0, width - 1)}…` : line))
 }
 
-/** What went wrong, in words the person can act on. */
-export function readerError({ spawnError, timedOut, code, stdout, stderr }) {
+/** What ssh (or the remote side) said, for the panel: stderr, else stdout. */
+function saidBy(run) {
+  const lines = tailLines(run.stderr, 3)
+  return (lines.length > 0 ? lines : tailLines(run.stdout, 2)).join(' / ').slice(0, 400)
+}
+
+function exitText(run) {
+  if (run.signal) return `シグナル ${run.signal}`
+  return `終了コード ${run.code ?? '-'}`
+}
+
+/** What went wrong with one ssh run, in words the person can act on; null when it worked. */
+export function readerError(run) {
+  const { spawnError, timedOut, code, stdout = '', stderr = '' } = run
   if (spawnError) {
     return spawnError.code === 'ENOENT'
       ? fail('ssh_missing', 'ssh が見つかりません。OpenSSH クライアントを入れてください')
@@ -187,12 +279,37 @@ export function readerError({ spawnError, timedOut, code, stdout, stderr }) {
     return fail('reader_failed', `サーバー側の読み取りに失敗しました: ${result.error ?? '不明なエラー'}`)
   }
   if (result) return null
-  const detail = lastLine(stderr)
-  if (code === 255) return fail('ssh_failed', `SSH で接続できません${detail ? `: ${detail}` : ''}`)
-  return fail(
-    'reader_failed',
-    `サーバー側の読み取りに失敗しました（終了コード ${code ?? '-'}）${detail ? `: ${detail}` : ''}`
-  )
+  const said = saidBy(run)
+  // 255 is ssh's own failure; anything else is the remote command's exit status.
+  if (code === 255) {
+    return fail(
+      'ssh_failed',
+      said
+        ? `SSH で接続できません（${exitText(run)}）: ${said}`
+        : `SSH で接続できません（${exitText(run)}、ssh からのメッセージなし）`
+    )
+  }
+  return fail('reader_failed', `サーバー側の読み取りに失敗しました（${exitText(run)}）${said ? `: ${said}` : ''}`)
+}
+
+/**
+ * One ssh run as log lines: which binary, the exact arguments, how it ended and what it
+ * printed. The log stays on this machine, so the target is written as configured.
+ * Environment variables are listed by name only.
+ */
+export function describeRun(run, label = 'ssh') {
+  const lines = [
+    `${label}: ${exitText(run)}${run.timedOut ? ' (タイムアウト)' : ''} ${run.ms ?? '-'}ms ssh=${run.ssh}` +
+      (run.spawnError ? ` spawn=${run.spawnError.code ?? ''} ${run.spawnError.message}` : ''),
+    `${label} args: ${JSON.stringify(run.args)}`,
+    `${label} stdin: ${run.stdinBytes === null ? 'なし' : `${run.stdinBytes} bytes`}`
+  ]
+  const stderr = tailLines(run.stderr, 12)
+  const stdout = tailLines(run.stdout, 4)
+  lines.push(`${label} stderr: ${stderr.length > 0 ? stderr.join(' ⏎ ') : '(空)'}`)
+  lines.push(`${label} stdout: ${stdout.length > 0 ? stdout.join(' ⏎ ') : '(空)'}`)
+  lines.push(`${label} env: 補った変数=[${(run.filledEnv ?? []).join(',')}] 渡した変数=[${(run.envNames ?? []).join(',')}]`)
+  return lines.map((line) => line.slice(0, 4000))
 }
 
 /** Child processes still running, so `deactivate` can stop them. */
@@ -217,6 +334,79 @@ function killTree(child) {
   }
 }
 
+/**
+ * Runs ssh once and resolves with everything about the run, whether or not it worked:
+ * the binary, the arguments, exit code or signal, output and timing. `input` is written
+ * to its stdin; without one ssh gets no stdin at all.
+ */
+function runSsh(args, { input = null, timeoutMs = SSH_TIMEOUT_MS } = {}) {
+  const env = childEnv()
+  const ssh = resolveSsh(env)
+  const started = Date.now()
+  const run = {
+    ssh,
+    args,
+    code: null,
+    signal: null,
+    spawnError: null,
+    timedOut: false,
+    stdout: '',
+    stderr: '',
+    ms: 0,
+    stdinBytes: input === null ? null : Buffer.byteLength(input),
+    filledEnv: filledEnv(),
+    envNames: Object.keys(env).sort()
+  }
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const finish = (outcome) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(Object.assign(run, outcome, { ms: Date.now() - started }))
+    }
+    let child
+    try {
+      child = spawn(ssh, args, {
+        env,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe']
+      })
+    } catch (spawnError) {
+      finish({ spawnError })
+      return
+    }
+    children.add(child)
+    timer = setTimeout(() => {
+      run.timedOut = true
+      killTree(child)
+    }, timeoutMs)
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      if (run.stdout.length < 8 * 1024 * 1024) run.stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      if (run.stderr.length < 64 * 1024) run.stderr += chunk
+    })
+    child.on('error', (spawnError) => {
+      children.delete(child)
+      finish({ spawnError })
+    })
+    child.on('close', (code, signal) => {
+      children.delete(child)
+      finish({ code, signal })
+    })
+    if (input !== null) {
+      // ssh that fails to connect closes stdin before the script is written.
+      child.stdin.on('error', () => {})
+      child.stdin.end(input)
+    }
+  })
+}
+
 let readerSource = null
 
 function readerScript() {
@@ -230,48 +420,82 @@ export function readerPayload(input, script) {
   return `globalThis.__AGENT_METER_INPUT__ = ${JSON.stringify(input)};\n${script}`
 }
 
-function runReader(settings, input) {
-  const args = buildSshArgs(settings)
-  const payload = readerPayload(input, readerScript())
-  return new Promise((resolve, reject) => {
-    let stdout = ''
-    let stderr = ''
-    let timedOut = false
-    let settled = false
-    const child = spawn(resolveSsh(childEnv()), args, {
-      env: childEnv(),
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
-    children.add(child)
-    const timer = setTimeout(() => {
-      timedOut = true
-      killTree(child)
-    }, SSH_TIMEOUT_MS)
-    const finish = (outcome) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      children.delete(child)
-      const error = readerError({ ...outcome, timedOut, stdout, stderr })
-      if (error) reject(error)
-      else resolve(parseReaderOutput(stdout))
+/** → the reader's result. A failure carries the run (`error.run`) for the log. */
+async function runReader(settings, input, timeoutMs = SSH_TIMEOUT_MS) {
+  const run = await runSsh(buildSshArgs(settings), { input: readerPayload(input, readerScript()), timeoutMs })
+  const error = readerError(run)
+  if (error) {
+    error.run = run
+    throw error
+  }
+  return parseReaderOutput(run.stdout)
+}
+
+const ECHO_MARK = 'AGENT_METER_ECHO'
+const STDIN_MARK = 'AGENT_METER_STDIN'
+const TEST_STEP_MS = 15_000
+
+/**
+ * The connection test: the same ssh, arguments and environment as a normal read, one
+ * step at a time, so a failure says which part breaks. A step that fails is run once
+ * more with `ssh -v`, whose trace usually names the cause. Everything goes to the log.
+ */
+async function testConnection(orca, settings) {
+  const env = childEnv()
+  const report = { ok: false, ssh: resolveSsh(env), version: '', filledEnv: filledEnv(), steps: [] }
+  const say = (lines) => {
+    for (const line of lines) orca.log(`test ${line}`)
+  }
+  if (!settings.sshTarget) {
+    report.steps.push({ name: '設定', ok: false, detail: 'SSH 接続先が未設定です' })
+    return report
+  }
+  try {
+    buildSshArgs(settings)
+  } catch (error) {
+    report.steps.push({ name: '設定', ok: false, detail: error.message })
+    return report
+  }
+
+  const version = await runSsh(['-V'], { timeoutMs: TEST_STEP_MS })
+  report.version = tailLines(`${version.stderr}\n${version.stdout}`, 1)[0] ?? ''
+  say(describeRun(version, 'ssh -V'))
+
+  const step = async (name, command, { input = null, passed }) => {
+    const run = await runSsh(buildSshArgs(settings, command), { input, timeoutMs: TEST_STEP_MS })
+    say(describeRun(run, name))
+    const result = { name, ok: false, ms: run.ms, detail: '' }
+    const error = run.spawnError || run.timedOut ? readerError(run) : null
+    if (!error && run.code === 0 && passed(run)) {
+      result.ok = true
+    } else {
+      result.detail = error
+        ? error.message
+        : String(run.stderr).includes(NODE_MISSING)
+          ? 'サーバーに Node.js が見つかりません'
+          : `${exitText(run)}${saidBy(run) ? `: ${saidBy(run)}` : '、メッセージなし'}`
+      if (!run.spawnError) {
+        const verbose = await runSsh(buildSshArgs(settings, command, ['-v']), { input, timeoutMs: TEST_STEP_MS })
+        say(describeRun(verbose, `${name} (-v)`))
+        result.trace = tailLines(verbose.stderr, 12)
+      }
     }
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => {
-      if (stdout.length < 8 * 1024 * 1024) stdout += chunk
-    })
-    child.stderr.on('data', (chunk) => {
-      if (stderr.length < 64 * 1024) stderr += chunk
-    })
-    child.on('error', (spawnError) => finish({ spawnError }))
-    child.on('close', (code) => finish({ code }))
-    // ssh that fails to connect closes stdin before the script is written.
-    child.stdin.on('error', () => {})
-    child.stdin.end(payload)
-  })
+    report.steps.push(result)
+    return result.ok
+  }
+
+  const ok =
+    (await step('接続', `echo ${ECHO_MARK}`, { passed: (run) => run.stdout.includes(ECHO_MARK) })) &&
+    (await step('標準入力', 'cat', { input: `${STDIN_MARK}\n`, passed: (run) => run.stdout.includes(STDIN_MARK) })) &&
+    (await step('node の検出', buildBootstrap(settings.remoteNode, '--version'), {
+      passed: (run) => /v\d+\.\d+/.test(run.stdout)
+    })) &&
+    (await step('読み取り', buildBootstrap(settings.remoteNode), {
+      input: readerPayload({ period: settings.period, agents: [] }, readerScript()),
+      passed: (run) => parseReaderOutput(run.stdout)?.ok === true
+    }))
+  report.ok = ok
+  return report
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +529,7 @@ function runCli(args, timeout = CLI_TIMEOUT_MS) {
         return
       }
       if (error || !payload) {
-        const detail = lastLine(stderr) || lastLine(stdout) || error?.message || 'unexpected output'
+        const detail = tailLines(stderr, 1)[0] || tailLines(stdout, 1)[0] || error?.message || 'unexpected output'
         reject(fail('action_failed', `orca ${args.slice(0, 2).join(' ')}: ${detail}`))
         return
       }
@@ -584,6 +808,8 @@ let last = null
 let lastKey = ''
 let lastStatusKey = ''
 let lastLogLine = ''
+/** The failed ssh run last written to the log, so a failure that repeats is logged once. */
+let lastRunKey = ''
 /** When a panel last asked; 0 once it said it was hidden. */
 let panelSeenAt = 0
 /** Panel-only mode with no panel open: no timer runs until a panel asks again. */
@@ -612,6 +838,16 @@ function logOnce(orca, line) {
   if (line === lastLogLine) return
   lastLogLine = line
   orca.log(line)
+}
+
+/** Writes a failed ssh run to the log in full, once per distinct failure. */
+function logRun(orca, run) {
+  if (!run) return
+  const lines = describeRun(run)
+  const key = lines.filter((line) => !/^ssh: /.test(line)).join('\n') + `|${run.code}|${run.signal}`
+  if (key === lastRunKey) return
+  lastRunKey = key
+  for (const line of lines) orca.log(line)
 }
 
 function publish(orca, snapshot, settings) {
@@ -678,6 +914,7 @@ async function build(orca, settings) {
       .filter(([, source]) => source?.error)
       .map(([name, source]) => `${AGENT_LABELS[name] ?? name}: ${source.error}`)
     if (sourceErrors.length > 0 && !base.notice) base.notice = sourceErrors.join(' / ')
+    lastRunKey = ''
     const groups = buildGroups(reader, agents, handles)
     logOnce(
       orca,
@@ -686,6 +923,7 @@ async function build(orca, settings) {
     return { ...base, groups }
   } catch (error) {
     logOnce(orca, `state ERR ${error.code ?? '-'} ${error.message}`)
+    logRun(orca, error.run)
     // Keep the last good figures on screen; the banner says they are old.
     return {
       ...base,
@@ -781,6 +1019,7 @@ export default function activate(orca) {
   lastKey = ''
   lastStatusKey = ''
   lastLogLine = ''
+  lastRunKey = ''
   panelSeenAt = 0
   paused = false
 
@@ -799,6 +1038,8 @@ export default function activate(orca) {
     return { ok: true }
   })
   orca.panels.handle('agent.focus', (input) => focusAgent(input?.id))
+  // Also reachable without the panel: `orca plugin dev request <folder> connection.test`.
+  orca.panels.handle('connection.test', async () => testConnection(orca, await readSettings(orca)))
 
   if (typeof orca.settings.onDidChange === 'function') {
     orca.settings.onDidChange(() => {

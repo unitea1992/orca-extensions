@@ -81,7 +81,23 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
-      .banner.error { border-color: var(--warn); color: var(--fg); }
+      .banner.error { border-color: var(--warn); color: var(--fg); white-space: normal; }
+      .banner.error > div { white-space: pre-wrap; }
+      .banner button {
+        display: block;
+        margin-top: 6px;
+        font: inherit;
+        font-size: 11px;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+      .banner button:hover { background: var(--fill); }
+      .banner button:disabled { opacity: 0.6; cursor: default; }
+      .test { margin-top: 6px; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 10px; }
       .list { flex: 1 1 auto; overflow-y: auto; padding: 0 10px 8px; display: flex; flex-direction: column; }
       .empty { color: var(--quiet); padding: 16px 4px; text-align: center; white-space: pre-wrap; }
       .empty code {
@@ -155,7 +171,11 @@
       <span class="title">パフォーマンス</span>
       <span class="where" id="where"></span>
     </div>
-    <div class="banner error" id="error" hidden></div>
+    <div class="banner error" id="error" hidden>
+      <div id="errorText"></div>
+      <button type="button" id="test">接続テスト</button>
+      <div class="test" id="testResult" hidden></div>
+    </div>
     <div class="banner" id="notice" hidden></div>
     <div class="list" id="list"></div>
     <div class="foot"><span id="period"></span><span id="every"></span></div>
@@ -173,6 +193,9 @@
       const el = {
         where: document.getElementById('where'),
         error: document.getElementById('error'),
+        errorText: document.getElementById('errorText'),
+        test: document.getElementById('test'),
+        testResult: document.getElementById('testResult'),
         notice: document.getElementById('notice'),
         list: document.getElementById('list'),
         period: document.getElementById('period'),
@@ -304,8 +327,11 @@
           return
         }
         if (snapshot.error) {
-          el.error.textContent = snapshot.error.message
+          el.errorText.textContent = snapshot.error.message
           el.error.hidden = false
+        } else {
+          // The test belongs to the failure it was run for.
+          el.testResult.hidden = true
         }
         if (snapshot.notice) {
           el.notice.textContent = snapshot.notice
@@ -338,6 +364,35 @@
         }
         render()
       }
+
+      function seconds(ms) {
+        return `${(ms / 1000).toFixed(1)}秒`
+      }
+
+      /** The worker's connection test as lines: which step broke and what ssh said. */
+      function testLines(report) {
+        const lines = [`ssh: ${report.ssh}${report.version ? `（${report.version}）` : ''}`]
+        if (report.filledEnv.length > 0) lines.push(`補った環境変数: ${report.filledEnv.join(', ')}`)
+        for (const step of report.steps) {
+          const took = typeof step.ms === 'number' ? ` ${seconds(step.ms)}` : ''
+          lines.push(`${step.ok ? '✓' : '✗'} ${step.name}${took}${step.detail ? ` — ${step.detail}` : ''}`)
+          for (const line of step.trace ?? []) lines.push(`    ${line}`)
+        }
+        lines.push(report.ok ? 'すべて成功しました' : '詳細は orca plugin logs に出ています')
+        return lines
+      }
+
+      el.test.addEventListener('click', async () => {
+        el.test.disabled = true
+        el.testResult.hidden = false
+        el.testResult.textContent = 'テスト中…'
+        try {
+          el.testResult.textContent = testLines(await orca.plugin.request('connection.test', {})).join('\n')
+        } catch (error) {
+          el.testResult.textContent = String(error?.message ?? error)
+        }
+        el.test.disabled = false
+      })
 
       orca.plugin.on('snapshot', (next) => {
         snapshot = next

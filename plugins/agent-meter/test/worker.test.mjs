@@ -16,6 +16,8 @@ import {
   checkTarget,
   childEnv,
   contentKey,
+  describeRun,
+  filledEnv,
   flattenAgents,
   parseReaderOutput,
   pickEnvironment,
@@ -24,6 +26,7 @@ import {
   resolveSsh,
   statusBarItem,
   summarize,
+  tailLines,
   terminalHandles
 } from '../worker/main.mjs'
 
@@ -62,14 +65,100 @@ test('bootstrap: one sh -c word with nothing a login shell or Windows quoting ca
   }
 })
 
-test('ssh args: batch mode, optional identity, target after --', () => {
+test('ssh args: batch mode, optional identity, then target and command', () => {
   const args = buildSshArgs({ sshTarget: ' user@host ', identityFile: '', remoteNode: '' })
-  assert.deepEqual(args.slice(0, 7), ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', 'user@host'])
-  assert.equal(args.length, 8)
-  assert.equal(args[7], buildBootstrap(''))
+  // The same words that work typed into a terminal: no `--`, nothing after the command.
+  assert.deepEqual(args, ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'user@host', buildBootstrap('')])
   const withKey = buildSshArgs({ sshTarget: 'user@host', identityFile: '/keys/id_test', remoteNode: '' })
-  assert.deepEqual(withKey.slice(5, 9), ['-i', '/keys/id_test', '--', 'user@host'])
+  assert.deepEqual(withKey.slice(5, 8), ['-i', '/keys/id_test', 'user@host'])
+  assert.deepEqual(buildSshArgs({ sshTarget: 'user@host' }, 'echo ok', ['-v']), [
+    '-v',
+    '-T',
+    '-o',
+    'BatchMode=yes',
+    '-o',
+    'ConnectTimeout=10',
+    'user@host',
+    'echo ok'
+  ])
   assert.throws(() => buildSshArgs({ sshTarget: '-oProxyCommand=x' }), { code: 'invalid_params' })
+  assert.match(buildBootstrap('', '--version'), /exec \$n --version'$/)
+})
+
+/** How Node (libuv) turns one argument into command-line text on Windows. */
+function windowsQuote(arg) {
+  if (arg.length === 0) return '""'
+  if (!/[ \t"]/.test(arg)) return arg
+  if (!/["\\]/.test(arg)) return `"${arg}"`
+  let out = '"'
+  let backslashes = 0
+  for (const char of arg) {
+    if (char === '\\') {
+      backslashes += 1
+    } else if (char === '"') {
+      out += '\\'.repeat(backslashes * 2 + 1) + '"'
+      backslashes = 0
+    } else {
+      out += '\\'.repeat(backslashes) + char
+      backslashes = 0
+    }
+  }
+  return `${out}${'\\'.repeat(backslashes * 2)}"`
+}
+
+/** How a Windows program (the C runtime) splits command-line text back into arguments. */
+function windowsSplit(line) {
+  const args = []
+  let current = ''
+  let quoted = false
+  let started = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (char === '\\') {
+      let count = 0
+      while (line[index] === '\\') {
+        count += 1
+        index += 1
+      }
+      if (line[index] === '"') {
+        current += '\\'.repeat(count >> 1)
+        if (count % 2 === 1) current += '"'
+        else quoted = !quoted
+      } else {
+        current += '\\'.repeat(count)
+        index -= 1
+      }
+      started = true
+    } else if (char === '"') {
+      quoted = !quoted
+      started = true
+    } else if ((char === ' ' || char === '\t') && !quoted) {
+      if (started) args.push(current)
+      current = ''
+      started = false
+    } else {
+      current += char
+      started = true
+    }
+  }
+  if (started) args.push(current)
+  return args
+}
+
+test('ssh args survive the Windows command line unchanged', () => {
+  const cases = [
+    buildSshArgs({ sshTarget: 'user@host' }),
+    buildSshArgs({ sshTarget: 'user@host', remoteNode: '~/.local/bin/node' }, undefined, ['-v']),
+    buildSshArgs({ sshTarget: 'user@host', identityFile: 'C:\\Users\\some user\\.ssh\\id_test' }, 'echo ok'),
+    buildSshArgs({ sshTarget: 'user@host', identityFile: 'C:\\keys dir\\' }, 'cat')
+  ]
+  for (const args of cases) {
+    const line = ['ssh.exe', ...args].map(windowsQuote).join(' ')
+    assert.deepEqual(windowsSplit(line), ['ssh.exe', ...args])
+  }
+  // The command is one word wrapped in plain double quotes: nothing in it needs escaping.
+  const bootstrap = buildBootstrap('')
+  assert.equal(windowsQuote(bootstrap), `"${bootstrap}"`)
 })
 
 test('ssh binary: PATH first on Windows, then the bundled OpenSSH', () => {
@@ -83,12 +172,61 @@ test('ssh binary: PATH first on Windows, then the bundled OpenSSH', () => {
 })
 
 test('child env: restores what a reduced worker environment lacks', () => {
-  const posix = childEnv({}, 'linux')
-  assert.ok(posix.HOME)
-  assert.ok(posix.PATH)
-  const windows = childEnv({}, 'win32')
-  assert.ok(windows.USERPROFILE && windows.APPDATA && windows.LOCALAPPDATA && windows.SystemRoot)
+  const posix = childEnv({}, 'linux', '/home/someone')
+  assert.deepEqual(posix, { HOME: '/home/someone', PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' })
   assert.equal(childEnv({ HOME: '/h', PATH: '/p' }, 'linux').PATH, '/p')
+
+  // What OpenSSH for Windows needs to start at all, and what a normal session has.
+  const windows = childEnv({}, 'win32', 'C:\\Users\\someone')
+  assert.deepEqual(
+    {
+      SystemRoot: windows.SystemRoot,
+      SystemDrive: windows.SystemDrive,
+      ProgramData: windows.ProgramData,
+      ALLUSERSPROFILE: windows.ALLUSERSPROFILE,
+      ComSpec: windows.ComSpec,
+      USERPROFILE: windows.USERPROFILE,
+      HOMEDRIVE: windows.HOMEDRIVE,
+      HOMEPATH: windows.HOMEPATH,
+      APPDATA: windows.APPDATA,
+      LOCALAPPDATA: windows.LOCALAPPDATA,
+      TEMP: windows.TEMP
+    },
+    {
+      SystemRoot: 'C:\\Windows',
+      SystemDrive: 'C:',
+      ProgramData: 'C:\\ProgramData',
+      ALLUSERSPROFILE: 'C:\\ProgramData',
+      ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+      USERPROFILE: 'C:\\Users\\someone',
+      HOMEDRIVE: 'C:',
+      HOMEPATH: '\\Users\\someone',
+      APPDATA: 'C:\\Users\\someone\\AppData\\Roaming',
+      LOCALAPPDATA: 'C:\\Users\\someone\\AppData\\Local',
+      TEMP: 'C:\\Users\\someone\\AppData\\Local\\Temp'
+    }
+  )
+  assert.match(windows.PATH, /C:\\Windows\\System32\\OpenSSH$/)
+  assert.ok(filledEnv({}, 'win32', 'C:\\Users\\someone').includes('ProgramData'))
+
+  // Present values are kept, whatever their case, and a drive other than C: is followed.
+  const kept = childEnv(
+    { SYSTEMROOT: 'D:\\Windows', programdata: 'E:\\Data', Path: 'X:\\tools', USERPROFILE: 'D:\\Users\\someone' },
+    'win32',
+    'D:\\Users\\someone'
+  )
+  assert.equal(kept.SYSTEMROOT, 'D:\\Windows')
+  assert.equal('SystemRoot' in kept, false)
+  assert.equal(kept.programdata, 'E:\\Data')
+  assert.equal('ProgramData' in kept, false)
+  assert.equal(kept.Path, 'X:\\tools')
+  assert.equal('PATH' in kept, false)
+  assert.equal(kept.SystemDrive, 'D:')
+  assert.equal(kept.ALLUSERSPROFILE, 'E:\\Data')
+  const filled = filledEnv({ SYSTEMROOT: 'D:\\Windows', Path: 'X:\\tools' }, 'win32', 'D:\\Users\\someone')
+  assert.equal(filled.includes('PATH') || filled.includes('Path') || filled.includes('SystemRoot'), false)
+  assert.ok(filled.includes('ProgramData') && filled.includes('USERPROFILE'))
+  assert.deepEqual(filledEnv({ HOME: '/h', PATH: '/p' }, 'linux', '/h'), [])
 })
 
 test('reader output: the sentinel line wins over rc-file noise', () => {
@@ -107,12 +245,57 @@ test('reader errors: each failure names what to do', () => {
     readerError({ code: 127, stdout: '', stderr: 'AGENT_METER_NODE_NOT_FOUND\n' }).code,
     'node_missing'
   )
-  const denied = readerError({ code: 255, stdout: '', stderr: 'user@host: Permission denied (publickey).\n' })
+  const denied = readerError({ code: 255, stdout: '', stderr: 'debug line\nuser@host: Permission denied (publickey).\n' })
   assert.equal(denied.code, 'ssh_failed')
-  assert.match(denied.message, /Permission denied/)
+  assert.equal(denied.message, 'SSH で接続できません（終了コード 255）: debug line / user@host: Permission denied (publickey).')
+  // ssh ended without a word: say so, with the code, instead of an empty reason.
+  const silent = readerError({ code: 255, stdout: '', stderr: '' })
+  assert.equal(silent.message, 'SSH で接続できません（終了コード 255、ssh からのメッセージなし）')
+  // Nothing on stderr: whatever came on stdout is the best clue.
+  assert.match(readerError({ code: 255, stdout: 'banner text\n', stderr: '' }).message, /: banner text$/)
   const failed = readerError({ code: 0, stdout: `${SENTINEL}{"ok":false,"error":"boom"}\n`, stderr: '' })
   assert.match(failed.message, /boom/)
-  assert.equal(readerError({ code: 1, stdout: '', stderr: 'SyntaxError: x\n' }).code, 'reader_failed')
+  const remote = readerError({ code: 1, stdout: '', stderr: 'SyntaxError: x\n' })
+  assert.deepEqual({ code: remote.code, message: remote.message }, {
+    code: 'reader_failed',
+    message: 'サーバー側の読み取りに失敗しました（終了コード 1）: SyntaxError: x'
+  })
+  assert.match(readerError({ code: null, signal: 'SIGKILL', stdout: '', stderr: '' }).message, /シグナル SIGKILL/)
+})
+
+test('tailLines: the last lines that say something', () => {
+  assert.deepEqual(tailLines('a\r\n\n  b  \n(node:1) ExperimentalWarning: x\nc\n', 2), ['b', 'c'])
+  assert.deepEqual(tailLines('', 3), [])
+  assert.equal(tailLines('x'.repeat(500), 1, 50)[0].length, 50)
+})
+
+test('describeRun: the binary, the exact arguments, the exit and the output', () => {
+  const lines = describeRun({
+    ssh: 'C:\\Windows\\System32\\OpenSSH\\ssh.exe',
+    args: ['-T', 'user@host', 'echo ok'],
+    code: 255,
+    signal: null,
+    timedOut: false,
+    spawnError: null,
+    stdout: '',
+    stderr: 'first\nsecond\n',
+    ms: 120,
+    stdinBytes: 42,
+    filledEnv: ['ProgramData'],
+    envNames: ['PATH', 'ProgramData']
+  })
+  assert.deepEqual(lines, [
+    'ssh: 終了コード 255 120ms ssh=C:\\Windows\\System32\\OpenSSH\\ssh.exe',
+    'ssh args: ["-T","user@host","echo ok"]',
+    'ssh stdin: 42 bytes',
+    'ssh stderr: first ⏎ second',
+    'ssh stdout: (空)',
+    'ssh env: 補った変数=[ProgramData] 渡した変数=[PATH,ProgramData]'
+  ])
+  const empty = describeRun({ ssh: 'ssh', args: [], code: null, signal: 'SIGKILL', timedOut: true, stdout: '', stderr: '', ms: 1, stdinBytes: null })
+  assert.equal(empty[0], 'ssh: シグナル SIGKILL (タイムアウト) 1ms ssh=ssh')
+  assert.equal(empty[2], 'ssh stdin: なし')
+  assert.equal(empty[3], 'ssh stderr: (空)')
 })
 
 // --- the bootstrap, run for real ---------------------------------------------------

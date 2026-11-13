@@ -149,12 +149,49 @@ Orca の一覧には、エージェントのワークスペースのパスはあ
 | 表示 | 原因と対処 |
 |---|---|
 | `ssh が見つかりません` | OpenSSH クライアントを入れる（Windows: 設定 → オプション機能 → OpenSSH クライアント） |
-| `SSH で接続できません: …` | 端末で `ssh -o BatchMode=yes user@host "echo ok"` を試す。`Permission denied` なら鍵、`Host key verification failed` なら一度手で接続して承認 |
+| `SSH で接続できません（終了コード 255）: …` | `:` の後ろが ssh の言い分です。`Permission denied` なら鍵、`Host key verification failed` なら一度手で接続して承認 |
+| `SSH で接続できません（終了コード 255、ssh からのメッセージなし）` | ssh が何も言わずに終了しています。端末では通るのにここだけ失敗するなら、worker の環境の違いです。下の「接続テスト」とログで切り分けます |
 | `サーバーに Node.js が見つかりません` | サーバーで `which node` の結果を `remoteNode` に入れる |
 | `サーバーの応答が 25 秒以内にありません` | サーバーが重いか、回線が遅い。`refreshSeconds` を延ばす |
+| `サーバー側の読み取りに失敗しました（終了コード N）: …` | 接続はできていて、サーバー側のコマンドが失敗しています。`:` の後ろがその出力です |
 | `エージェント一覧を取得できません: …` | `environment` の名前を `orca environment list` で確認。tok/s はこの状態でも出ます |
 
-ログは `orca plugin logs` で見られます。
+### 接続テスト
+
+エラーが出ているとき、パネルのエラー表示にある **接続テスト** を押すと、ふだんの読み取りと同じ `ssh`・同じ引数・同じ環境変数で、次を順に試して結果を出します。
+
+1. **接続** … `echo` を1回実行する（標準入力なし）
+2. **標準入力** … 標準入力に流した1行が `cat` で返ってくるか
+3. **node の検出** … サーバーで `node` を見つけて `--version` を実行する
+4. **読み取り** … reader を流して結果を受け取る
+
+失敗した段で止まり、その段を `ssh -v` でもう一度実行して、末尾の出力を一緒に表示します。パネルを開かずに実行することもできます。
+
+```bash
+orca plugin dev request <プラグインのフォルダ> connection.test
+```
+
+### ログ
+
+`orca plugin logs` で見られます。読み取りに失敗すると、その実行の中身を1回だけ書き出します（同じ失敗が続く間は繰り返しません）。接続先は設定した値のまま出ます。ログはこのマシンの中にしか残りません。
+
+```text
+state ERR ssh_failed SSH で接続できません（終了コード 255）: user@host: Permission denied (publickey).
+ssh: 終了コード 255 412ms ssh=C:\Windows\System32\OpenSSH\ssh.exe
+ssh args: ["-T","-o","BatchMode=yes","-o","ConnectTimeout=10","user@host","sh -c '…'"]
+ssh stdin: 46210 bytes
+ssh stderr: user@host: Permission denied (publickey).
+ssh stdout: (空)
+ssh env: 補った変数=[ProgramData,…] 渡した変数=[APPDATA,HOME,PATH,…]
+```
+
+- `ssh=` … 実際に起動した ssh。Windows では PATH で最初に見つかった `ssh.exe`、無ければ Windows 付属のもの
+- `ssh args` … ssh に渡した引数そのまま
+- `ssh env` … 環境変数は**名前だけ**出します（値は出しません）。`補った変数` は、worker の環境に無かったので足したものです
+
+### Windows の環境変数
+
+Orca はプラグインの worker を、絞った環境変数で起動します。Windows の OpenSSH は起動直後に `ProgramData` を読み、無いとエラーを出力できる状態になる前に終了コード 255 で終わります（メッセージが一切出ません）。そこで worker は、ふつうの Windows セッションに必ずある変数（`SystemRoot`、`ProgramData`、`USERPROFILE`、`HOMEDRIVE`、`HOMEPATH`、`APPDATA`、`LOCALAPPDATA`、`TEMP`、`ComSpec`、`PATH` など）を、**無いときだけ**既定の場所で補ってから ssh を起動します。すでにある値は変えません。
 
 ## テスト
 
@@ -166,6 +203,8 @@ node --test
 ```
 
 フィクスチャ（`test/fixtures/`）は全部作りものです。形を変えたら `node scripts/make-fixtures.mjs` で作り直してください。
+
+worker を偽の Orca API と `ssh` の代役で丸ごと動かすテスト（`test/worker-loop.test.mjs`）があるので、全体で十数秒かかります。
 
 サーバー上で reader だけを試すこともできます。
 
