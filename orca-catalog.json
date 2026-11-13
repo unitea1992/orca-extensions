@@ -93,6 +93,42 @@
           "changelog": "最初のリリース。Run ごとの確認待ち一覧（折りたたみ可）、番号＋一言の回答行のコピー、未回答のみの絞り込み、相対時刻。"
         }
       ]
+    },
+    {
+      "id": "unitea1992.agent-meter",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/unitea1992/orca-extensions.git",
+        "ref": "main",
+        "path": "plugins/agent-meter"
+      },
+      "description": "Agent Meter: リモートの Orca サーバーで動くコーディングエージェントの、モデル別の出力速度（tok/s）とエージェント別のコンテキスト使用率を、右サイドバーに出す。",
+      "categories": [
+        "productivity"
+      ],
+      "releases": [
+        {
+          "version": "0.1.0",
+          "commit": "26449759b3287b66d0371eec140ed7f080e8ceec",
+          "contentHash": "8a161c48d4031b3c47a5d787fce9c71df5b75872cc2867a708fd542fde8b6e17",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Agent Meter",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "パフォーマンス"
+            }
+          ],
+          "capabilities": [
+            "settings:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-13",
+          "changelog": "最初のリリース。SSH でリモートのサーバーのログを読み、Claude Code・Codex・pi・OpenCode・DSH のモデル別 tok/s（effort 別）とエージェント別のコンテキスト使用率をパネルに出す。パネルを開いている間だけ読む。"
+        }
+      ]
     }
   ]
 }
