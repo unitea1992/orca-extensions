@@ -145,7 +145,9 @@
       button.row { cursor: pointer; }
       button.row:hover { background: var(--fill); color: var(--orca-accent-foreground, var(--fg)); }
       button.row:focus-visible { outline: 1px solid var(--orca-ring, var(--hi)); outline-offset: -1px; }
-      .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .name { min-width: 0; }
+      .name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sub { padding-left: 11px; font-size: 10px; color: var(--quiet); }
       .dot {
         display: inline-block;
         width: 6px;
@@ -171,6 +173,9 @@
       <span class="title">パフォーマンス</span>
       <span class="where" id="where"></span>
     </div>
+    <div class="banner error" id="consent" hidden>
+      <div>Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください（開発フォルダなら orca plugin dev watch をやり直す）。それまでステータスバーは更新されません。</div>
+    </div>
     <div class="banner error" id="error" hidden>
       <div id="errorText"></div>
       <button type="button" id="test">接続テスト</button>
@@ -192,6 +197,7 @@
 
       const el = {
         where: document.getElementById('where'),
+        consent: document.getElementById('consent'),
         error: document.getElementById('error'),
         errorText: document.getElementById('errorText'),
         test: document.getElementById('test'),
@@ -256,8 +262,13 @@
           })
         }
         const name = node('span', 'name')
-        name.append(node('span', row.working ? 'dot working' : 'dot'), row.name)
+        const first = node('span')
+        first.append(node('span', row.working ? 'dot working' : 'dot'), row.name)
+        name.append(first)
+        // Several agents share this workspace: its title, or a number, tells them apart.
+        if (row.sub) name.append(node('span', 'sub', row.sub))
         element.append(name)
+        const label = row.sub ? `${row.name} ${row.sub}` : row.name
 
         const track = node('span', 'track')
         const percent = node('span', 'pct')
@@ -267,14 +278,14 @@
           track.append(fill)
           percent.className = `pct ${level(row.percent)}`
           percent.textContent = `${Math.round(row.percent)}%`
-          element.title = `${row.name}  ${compact(row.tokens)} / ${row.windowEstimated ? '≈' : ''}${compact(row.window)}`
+          element.title = `${label}  ${compact(row.tokens)} / ${row.windowEstimated ? '≈' : ''}${compact(row.window)}`
         } else if (row.tokens !== null) {
           percent.textContent = compact(row.tokens)
-          element.title = `${row.name}  ${compact(row.tokens)}`
+          element.title = `${label}  ${compact(row.tokens)}`
         } else {
           percent.className = 'pct none'
           percent.textContent = '—'
-          element.title = row.name
+          element.title = label
         }
         element.append(track, percent)
         return element
@@ -305,6 +316,7 @@
 
       function render() {
         el.list.replaceChildren()
+        el.consent.hidden = !(snapshot && snapshot.consentRequired)
         el.error.hidden = true
         el.notice.hidden = true
         if (!snapshot) {
@@ -319,6 +331,8 @@
         renderAge()
 
         if (!snapshot.configured) {
+          // Without approval the settings cannot be read, so "not set" may be wrong.
+          if (snapshot.consentRequired) return
           const setup = node('div', 'empty')
           setup.append('SSH 接続先がまだ設定されていません。\nSettings → Plugins → Agent Meter の「SSH 接続先」に\n')
           setup.append(node('code', '', 'user@host'))

@@ -311,9 +311,19 @@ writeFileSync(
           ]
         },
         { path: '/work/beta', displayName: '', agents: [{ paneKey: 'tab-2:leaf-2', agentType: 'pi', state: 'idle', updatedAt: T0 }] },
+        {
+          // Three agents in one workspace: one titled by Orca, one by its terminal, one untitled.
+          path: '/work/delta',
+          displayName: 'develop',
+          agents: [
+            { paneKey: 'tab-5:leaf-b', agentType: 'claude', state: 'done', displayName: null, taskTitle: null, updatedAt: T0 },
+            { paneKey: 'tab-5:leaf-a', agentType: 'claude', state: 'done', displayName: 'Fix   login\nflow', taskTitle: 'Fix login flow', updatedAt: T0 },
+            { paneKey: 'tab-6:leaf-a', agentType: 'codex', state: 'done', displayName: null, taskTitle: null, updatedAt: T0 }
+          ]
+        },
         { path: '/work/empty', displayName: 'empty', agents: [] }
       ],
-      totalCount: 3,
+      totalCount: 4,
       truncated: false
     },
     null,
@@ -326,7 +336,8 @@ writeFileSync(
     {
       terminals: [
         { handle: 'term_one', tabId: 'tab-1', leafId: 'leaf-1', worktreePath: '/work/alpha' },
-        { handle: 'term two', tabId: 'tab-2', leafId: 'leaf-2', worktreePath: '/work/beta' }
+        { handle: 'term two', tabId: 'tab-2', leafId: 'leaf-2', worktreePath: '/work/beta' },
+        { handle: 'term_three', tabId: 'tab-6', leafId: 'leaf-a', title: 'codex: review', worktreePath: '/work/delta' }
       ]
     },
     null,

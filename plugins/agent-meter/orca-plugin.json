@@ -35,10 +35,17 @@
     ],
     "statusBarItems": [
       {
-        "id": "meter",
+        "id": "speed",
         "text": "⚡ —",
         "tone": "neutral",
-        "tooltip": "Agent Meter: 読み込み中",
+        "tooltip": "Agent Meter 出力速度: 読み込み中",
+        "command": "agentMeter.toggleSidebar"
+      },
+      {
+        "id": "context",
+        "text": "◔ —",
+        "tone": "neutral",
+        "tooltip": "Agent Meter コンテキスト: 読み込み中",
         "command": "agentMeter.toggleSidebar"
       }
     ],

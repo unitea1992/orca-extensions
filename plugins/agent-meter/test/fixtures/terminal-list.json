@@ -11,6 +11,13 @@
       "tabId": "tab-2",
       "leafId": "leaf-2",
       "worktreePath": "/work/beta"
+    },
+    {
+      "handle": "term_three",
+      "tabId": "tab-6",
+      "leafId": "leaf-a",
+      "title": "codex: review",
+      "worktreePath": "/work/delta"
     }
   ]
 }

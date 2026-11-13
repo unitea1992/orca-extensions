@@ -1044,7 +1044,9 @@ function collectDsh(run) {
       if (!session.name.startsWith('session-')) continue
       const file = path.join(dir, session.name, 'session.v4.jsonl.zstd')
       const stat = statOrNull(file)
-      if (stat && stat.isFile() && stat.mtimeMs >= run.since) files.push({ file, mtime: stat.mtimeMs, size: stat.size })
+      if (stat && stat.isFile() && stat.mtimeMs >= run.since) {
+        files.push({ file, mtime: stat.mtimeMs, size: stat.size, key: session.name })
+      }
     }
   }
   const stats = { files: 0, samples: 0 }
@@ -1068,6 +1070,8 @@ function collectDsh(run) {
     if (result.header.subagent || result.header.cwd === null) continue
     run.rows.push({
       id: null,
+      // Stays the same for the session's life, so two in one directory keep their order.
+      key: item.key,
       agent: 'dsh',
       cwd: result.header.cwd,
       state: run.now - item.mtime <= DSH_WORKING_MS ? 'working' : 'idle',

@@ -1,6 +1,6 @@
 // The worker as Orca runs it: against a stand-in Orca API, with stand-ins for `ssh`
 // and the `orca` CLI on PATH. Covers when the server is read, what a failed read
-// writes to the log, and the connection test.
+// writes to the log, the connection test, and Orca refusing calls for want of approval.
 // A file of its own: it changes PATH and HOME for the whole process.
 
 import assert from 'node:assert/strict'
@@ -50,9 +50,13 @@ const settings = {
   refreshSeconds: 5
 }
 const handlers = new Map()
+/** Every status bar update the worker sent, and the latest per item. */
 const bars = []
+const bar = (id) => bars.findLast((update) => update.id === id) ?? {}
 const posts = []
 const logs = []
+/** Set to make the stand-in host refuse like Orca does when approval is stale. */
+let refuse = false
 let changed = () => {}
 let scratch = null
 let counter = ''
@@ -83,13 +87,24 @@ before(() => {
   process.env.HOME = home
   process.env.AM_SSH_RUNS = counter
   delete process.env.AM_SSH_FAIL
+  // The stand-in server must be empty: drop what would point the reader at real logs.
+  for (const name of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'PI_CODING_AGENT_DIR', 'OPENCODE_DB', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) {
+    delete process.env[name]
+  }
   activate({
     api: { major: 1, minor: 6 },
     grantedCapabilities: ['settings:own'],
     log: (line) => logs.push(line),
     settings: { get: async (key) => settings[key], onDidChange: (handler) => (changed = handler) },
     panels: { handle: (name, handler) => handlers.set(name, handler), post: (name) => posts.push(name) },
-    host: { has: () => true, call: async (method, params) => (bars.push(params), { ok: true }) }
+    host: {
+      has: () => true,
+      call: async (method, params) => {
+        if (refuse) throw Object.assign(new Error('plugin is not enabled with current consent'), { code: 'consent_required' })
+        bars.push(params)
+        return { ok: true }
+      }
+    }
   })
 })
 
@@ -100,9 +115,9 @@ after(() => {
 
 test('panel-only mode reads only while a panel is open', { skip, timeout: 60_000 }, async () => {
   // No panel has asked: the status bar item is hidden and the server is left alone.
-  await until(() => bars.length > 0, 'the status bar update')
+  await until(() => bars.length >= 2, 'the status bar updates')
   await sleep(600)
-  assert.equal(bars.at(-1).visible, false)
+  assert.deepEqual([bar('speed').visible, bar('context').visible], [false, false])
   assert.equal(sshRuns(), 0)
 
   // A panel opens: one read, answered with the result.
@@ -125,16 +140,19 @@ test('panel-only mode reads only while a panel is open', { skip, timeout: 60_000
   const reopened = await handlers.get('snapshot.get')({})
   assert.equal(reopened.configured, true)
   await until(() => sshRuns() === atClose + 1, 'the read after reopening')
-  assert.equal(bars.at(-1).visible, false)
+  assert.deepEqual([bar('speed').visible, bar('context').visible], [false, false])
 
   // With the status bar item shown, the worker reads with no panel at all.
   await handlers.get('panel.hidden')({})
   const beforeSwitch = sshRuns()
   settings.displayMode = 'statusbar'
   changed({ key: 'displayMode' })
-  await until(() => bars.at(-1).visible === true, 'the status bar item to show')
+  await until(() => bar('speed').visible === true, 'the speed item to show')
   await until(() => sshRuns() > beforeSwitch, 'a read in status bar mode')
   assert.ok(posts.includes('snapshot'))
+  // Nothing on the stand-in server, so there is a speed item and no percentage to show.
+  assert.deepEqual({ text: bar('speed').text, tone: bar('speed').tone }, { text: '⚡ —', tone: 'neutral' })
+  assert.equal(bar('context').visible, false)
 })
 
 test('connection test: every step runs the real ssh arguments', { skip, timeout: 60_000 }, async () => {
@@ -166,7 +184,8 @@ test('a silent ssh failure is reported with its exit code and logged in full', {
     await until(() => logs.some((line) => line.startsWith('state ERR ssh_failed')), 'the failed read')
     const snapshot = await handlers.get('snapshot.get')({})
     assert.equal(snapshot.error.message, 'SSH で接続できません（終了コード 255、ssh からのメッセージなし）')
-    assert.equal(bars.at(-1).text, '⚡ 取得失敗')
+    await until(() => bar('speed').text === '⚡ 取得失敗', 'the failure on the speed item')
+    assert.equal(bar('speed').tone, 'warning')
     // The log names the binary, the arguments as passed, and that nothing was printed.
     assert.ok(logs.some((line) => /^ssh: 終了コード 255 \d+ms ssh=.*ssh$/.test(line)))
     assert.ok(logs.some((line) => line.startsWith('ssh args: ["-T","-o","BatchMode=yes","-o","ConnectTimeout=10","user@host","sh -c ')))
@@ -192,4 +211,46 @@ test('a silent ssh failure is reported with its exit code and logged in full', {
   } finally {
     delete process.env.AM_SSH_FAIL
   }
+})
+
+test('stale approval: logged once, shown in the panel, and cleared when it comes back', { skip, timeout: 60_000 }, async () => {
+  const snapshot = async () => handlers.get('snapshot.get')({})
+  // Each settings change makes the worker read and publish again, as a refresh does.
+  const refreshOnce = async () => {
+    const before = sshRuns()
+    settings.period = settings.period === '1h' ? '24h' : '1h'
+    changed({ key: 'period' })
+    await until(() => sshRuns() > before, 'a read')
+    await sleep(300)
+  }
+  await refreshOnce()
+  assert.equal((await snapshot()).consentRequired, false)
+
+  logs.length = 0
+  posts.length = 0
+  refuse = true
+  try {
+    await refreshOnce()
+    await until(() => logs.some((line) => line.startsWith('consent_required:')), 'the consent line')
+    // The panel is told, by a post and in the answer to its own request.
+    assert.equal((await snapshot()).consentRequired, true)
+    assert.ok(posts.includes('snapshot'))
+
+    // Both items are refused on every refresh; the log still has the one line.
+    await refreshOnce()
+    await refreshOnce()
+    assert.equal(logs.filter((line) => line.startsWith('consent_required:')).length, 1)
+    assert.equal(logs.some((line) => line.includes('statusBar.update ERR')), false)
+    assert.equal((await snapshot()).consentRequired, true)
+  } finally {
+    refuse = false
+  }
+
+  // Approved again: the next refresh goes through, says so once, and the banner goes.
+  const sent = bars.length
+  await refreshOnce()
+  await until(() => logs.some((line) => line.startsWith('consent: ')), 'the recovery line')
+  assert.equal((await snapshot()).consentRequired, false)
+  assert.ok(bars.length > sent)
+  assert.equal(logs.filter((line) => line.startsWith('consent: ')).length, 1)
 })

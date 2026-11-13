@@ -10,6 +10,7 @@ import { SENTINEL as READER_SENTINEL } from '../reader/reader.mjs'
 import {
   DEFAULTS,
   SENTINEL,
+  STATUS_ITEMS,
   buildBootstrap,
   buildGroups,
   buildSshArgs,
@@ -19,15 +20,18 @@ import {
   describeRun,
   filledEnv,
   flattenAgents,
+  isConsentError,
+  labelAgents,
   parseReaderOutput,
   pickEnvironment,
   readerError,
   readerPayload,
   resolveSsh,
-  statusBarItem,
+  statusBarItems,
   summarize,
   tailLines,
-  terminalHandles
+  terminalHandles,
+  terminalTitles
 } from '../worker/main.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -397,21 +401,52 @@ test('environment: a name the CLI cannot take falls back to its id', () => {
   )
 })
 
-test('worktree ps: known agent kinds with their workspace', () => {
+test('worktree ps: known agent kinds with their workspace and title', () => {
   assert.deepEqual(
-    flattenAgents(fixture('worktree-ps.json')).map(({ id, type, state, cwd, name }) => ({ id, type, state, cwd, name })),
+    flattenAgents(fixture('worktree-ps.json')).map(({ id, type, state, cwd, name, title }) => ({ id, type, state, cwd, name, title })),
     [
-      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', name: 'alpha' },
-      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', name: 'alpha' },
-      { id: 'tab-2:leaf-2', type: 'pi', state: 'idle', cwd: '/work/beta', name: 'beta' }
+      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', name: 'alpha', title: '' },
+      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', name: 'alpha', title: '' },
+      { id: 'tab-2:leaf-2', type: 'pi', state: 'idle', cwd: '/work/beta', name: 'beta', title: '' },
+      { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', name: 'develop', title: '' },
+      // Whitespace in a title is flattened to one line.
+      { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', name: 'develop', title: 'Fix login flow' },
+      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', name: 'develop', title: '' }
     ]
   )
   assert.deepEqual(flattenAgents({}), [])
 })
 
-test('terminal list: pane key to handle, unsafe handles dropped', () => {
-  const handles = terminalHandles(fixture('terminal-list.json'))
-  assert.deepEqual([...handles], [['tab-1:leaf-1', 'term_one']])
+test('terminal list: pane key to handle and title, unsafe handles dropped', () => {
+  assert.deepEqual([...terminalHandles(fixture('terminal-list.json'))], [
+    ['tab-1:leaf-1', 'term_one'],
+    ['tab-6:leaf-a', 'term_three']
+  ])
+  assert.deepEqual([...terminalTitles(fixture('terminal-list.json'))], [['tab-6:leaf-a', 'codex: review']])
+})
+
+test('labels: agents sharing a workspace get a title or a number, others none', () => {
+  const labelled = labelAgents(flattenAgents(fixture('worktree-ps.json')), terminalTitles(fixture('terminal-list.json')))
+  assert.deepEqual(
+    labelled.map((agent) => [agent.id, agent.sub]),
+    [
+      // Two kinds in one workspace are told apart as well.
+      ['tab-1:leaf-1', '#2'],
+      ['structured-agent-session-1:pane-1', '#1'],
+      ['tab-2:leaf-2', ''],
+      // Numbered by pane key, not by listing order, so a number stays with its agent.
+      ['tab-5:leaf-b', '#2'],
+      ['tab-5:leaf-a', 'Fix login flow'],
+      ['tab-6:leaf-a', 'codex: review']
+    ]
+  )
+  const agent = (id, title) => ({ id, type: 'claude', state: 'done', cwd: '/work/x', name: 'x', title, updatedAt: 0 })
+  // The same title twice says nothing, so the number is added.
+  assert.deepEqual(
+    labelAgents([agent('b', 'Review'), agent('a', 'Review'), agent('c', 'Other')]).map((entry) => entry.sub),
+    ['Review #2', 'Review #1', 'Other']
+  )
+  assert.deepEqual(labelAgents([agent('a', 'Alone')]).map((entry) => entry.sub), [''])
 })
 
 // --- what is shown ------------------------------------------------------------------
@@ -428,12 +463,16 @@ const READER = {
     { id: 'c2', agent: 'claude', cwd: '/work/beta', state: 'done', model: 'claude-test-1', contextTokens: 180_000, contextWindow: 1_000_000, windowEstimated: true },
     { id: 'structured-agent-session-1:pane-1', agent: 'codex', cwd: '/work/alpha', state: 'done', model: 'gpt-test-1', contextTokens: 50_000, contextWindow: 400_000, windowEstimated: false },
     { id: 'c3', agent: 'claude', cwd: '/work/none', state: 'done', model: null, contextTokens: null, contextWindow: null, windowEstimated: false },
-    { id: null, agent: 'dsh', cwd: '/work/gamma', state: 'working', model: 'dsh-test-1', contextTokens: 9000, contextWindow: null, windowEstimated: false }
+    { id: 'tab-5:leaf-b', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-1', contextTokens: 24_000, contextWindow: 200_000, windowEstimated: true },
+    { id: 'tab-5:leaf-a', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-1', contextTokens: 20_000, contextWindow: 200_000, windowEstimated: true },
+    { id: 'tab-6:leaf-a', agent: 'codex', cwd: '/work/delta', state: 'done', model: 'gpt-test-1', contextTokens: 20_000, contextWindow: 400_000, windowEstimated: false },
+    { id: null, key: 'session-b', agent: 'dsh', cwd: '/work/gamma', state: 'working', model: 'dsh-test-1', contextTokens: 9000, contextWindow: null, windowEstimated: false }
   ]
 }
 
 function snapshotOf(reader, overrides = {}) {
-  const agents = flattenAgents(fixture('worktree-ps.json'))
+  const titles = terminalTitles(fixture('terminal-list.json'))
+  const agents = labelAgents(flattenAgents(fixture('worktree-ps.json')), titles)
   const handles = terminalHandles(fixture('terminal-list.json'))
   return {
     configured: true,
@@ -443,6 +482,7 @@ function snapshotOf(reader, overrides = {}) {
     fetchedAt: 1,
     error: null,
     notice: null,
+    consentRequired: false,
     groups: buildGroups(reader, agents, handles),
     ...overrides
   }
@@ -451,13 +491,14 @@ function snapshotOf(reader, overrides = {}) {
 test('groups: per model, kinds in a fixed order, agents under their model', () => {
   const groups = snapshotOf(READER).groups
   assert.deepEqual(
-    groups.map((group) => [group.agent, group.model, group.tokPerSec, group.rows.map((row) => row.name)]),
+    groups.map((group) => [group.agent, group.model, group.tokPerSec, group.rows.map((row) => [row.name, row.sub])]),
     [
-      ['claude', 'claude-test-1', 82.4, ['alpha', 'beta']],
-      ['claude', null, null, ['none']],
-      ['codex', 'gpt-test-1', 40, ['alpha']],
+      // The three agents of `develop` stay apart: by title where there is one, else by number.
+      ['claude', 'claude-test-1', 82.4, [['alpha', '#2'], ['beta', ''], ['develop', '#2'], ['develop', 'Fix login flow']]],
+      ['claude', null, null, [['none', '']]],
+      ['codex', 'gpt-test-1', 40, [['alpha', '#1'], ['develop', 'codex: review']]],
       ['pi', 'local-test-1', 120, []],
-      ['dsh', 'dsh-test-1', null, ['gamma']]
+      ['dsh', 'dsh-test-1', null, [['gamma', '']]]
     ]
   )
   const [alpha, beta] = groups[0].rows
@@ -468,41 +509,86 @@ test('groups: per model, kinds in a fixed order, agents under their model', () =
   // Not in the terminal list, so there is nothing to focus.
   assert.deepEqual({ working: beta.working, percent: beta.percent, focusable: beta.focusable }, { working: false, percent: 18, focusable: false })
   assert.equal(groups[2].rows[0].focusable, false)
+  assert.equal(groups[2].rows[1].focusable, true)
   // No window known: tokens only.
   assert.deepEqual({ tokens: groups[4].rows[0].tokens, percent: groups[4].rows[0].percent }, { tokens: 9000, percent: null })
+  assert.equal(groups.flatMap((group) => group.rows).some((row) => 'unlisted' in row), false)
 })
 
-test('status bar: median speed across models and the fullest context', () => {
+test('groups: sessions Orca does not list are numbered by their own key', () => {
+  const dsh = (key, tokens) => ({ id: null, key, agent: 'dsh', cwd: '/work/gamma', state: 'idle', model: 'dsh-test-1', contextTokens: tokens, contextWindow: 100_000, windowEstimated: false })
+  const groups = buildGroups({ models: [], agents: [dsh('session-b', 50_000), dsh('session-a', 10_000), { ...dsh('session-c', 1000), cwd: '/work/other' }] })
+  // Sorted by fullness on screen, numbered by key underneath.
+  assert.deepEqual(
+    groups[0].rows.map((row) => [row.name, row.sub, row.percent]),
+    [
+      ['gamma', '#2', 50],
+      ['gamma', '#1', 10],
+      ['other', '', 1]
+    ]
+  )
+})
+
+test('status bar: speed and context are separate items with their own colour', () => {
+  assert.deepEqual(STATUS_ITEMS, ['speed', 'context'])
   const snapshot = snapshotOf(READER)
-  assert.deepEqual(summarize(snapshot.groups), { tokPerSec: 82.4, fullest: { percent: 73, name: 'alpha' } })
-  const item = statusBarItem(snapshot)
-  assert.equal(item.text, '⚡ 82 tok/s · ◔ 73%')
-  assert.equal(item.tone, 'warning')
-  assert.match(item.tooltip, /Claude test-1 ≈82 tok\/s \/ Codex gpt-test-1 ≈40 tok\/s \/ pi local-test-1 120 tok\/s \/ 最大 73% alpha/)
-  assert.ok(item.tooltip.length <= 256)
+  const summary = summarize(snapshot.groups)
+  assert.equal(summary.tokPerSec, 82.4)
+  assert.deepEqual(summary.fullest[0], { percent: 73, name: 'alpha #2' })
+  const { speed, context } = statusBarItems(snapshot)
+  // A context at 73% colours the context item only.
+  assert.deepEqual({ text: speed.text, tone: speed.tone, visible: speed.visible }, { text: '⚡ 82 tok/s', tone: 'neutral', visible: true })
+  assert.equal(speed.tooltip, 'Agent Meter 出力速度（直近1時間）: Claude test-1 ≈82 tok/s / Codex gpt-test-1 ≈40 tok/s / pi local-test-1 120 tok/s')
+  assert.deepEqual({ text: context.text, tone: context.tone, visible: context.visible }, { text: '◔ 73%', tone: 'warning', visible: true })
+  // The fullest agents, fullest first.
+  assert.equal(
+    context.tooltip,
+    'Agent Meter コンテキスト: alpha #2 73% / beta 18% / alpha #1 13% / develop #2 12% / develop Fix login flow 10% / develop codex: review 5%'
+  )
 })
 
 test('status bar: tones at 70 and 90 percent, and the states with no figures', () => {
   const at = (tokens) =>
-    statusBarItem(
-      snapshotOf({ models: [], agents: [{ ...READER.agents[0], contextTokens: tokens }] })
-    )
-  assert.deepEqual([at(138_000).tone, at(140_000).tone, at(179_000).tone, at(180_000).tone], ['neutral', 'warning', 'warning', 'danger'])
-  assert.equal(at(140_000).text, '⚡ — · ◔ 70%')
-  assert.equal(statusBarItem(snapshotOf({ models: [], agents: [] })).text, '⚡ —')
-  const failed = statusBarItem(snapshotOf(READER, { error: { message: 'SSH で接続できません\n: x' } }))
-  assert.deepEqual({ text: failed.text, tone: failed.tone }, { text: '⚡ 取得失敗', tone: 'warning' })
-  assert.equal(/\n/.test(failed.tooltip), false)
-  const unset = statusBarItem({ configured: false, groups: [] })
-  assert.equal(unset.text, '⚡ 未設定')
-  const long = statusBarItem(
+    statusBarItems(snapshotOf({ models: [], agents: [{ ...READER.agents[0], contextTokens: tokens }] }))
+  assert.deepEqual(
+    [at(138_000), at(140_000), at(179_000), at(180_000)].map((items) => items.context.tone),
+    ['neutral', 'warning', 'warning', 'danger']
+  )
+  // However full the context, the speed item stays neutral.
+  assert.deepEqual({ text: at(190_000).speed.text, tone: at(190_000).speed.tone }, { text: '⚡ —', tone: 'neutral' })
+  assert.equal(at(190_000).context.text, '◔ 95%')
+
+  // Nothing to show a percentage for: the context item is hidden, not shown empty.
+  const empty = statusBarItems(snapshotOf({ models: [], agents: [] }))
+  assert.deepEqual({ text: empty.speed.text, context: empty.context }, { text: '⚡ —', context: { visible: false } })
+
+  // A failed read warns on the speed item; the context keeps the last good figure.
+  const failed = statusBarItems(snapshotOf(READER, { error: { message: 'SSH で接続できません\n: x' } }))
+  assert.deepEqual({ text: failed.speed.text, tone: failed.speed.tone }, { text: '⚡ 取得失敗', tone: 'warning' })
+  assert.equal(/\n/.test(failed.speed.tooltip), false)
+  assert.deepEqual({ text: failed.context.text, tone: failed.context.tone }, { text: '◔ 73%', tone: 'warning' })
+  assert.match(failed.context.tooltip, /^Agent Meter コンテキスト（前回の値）: /)
+
+  const unset = statusBarItems({ configured: false, groups: [] })
+  assert.deepEqual({ text: unset.speed.text, context: unset.context }, { text: '⚡ 未設定', context: { visible: false } })
+
+  const long = statusBarItems(
     snapshotOf({
       models: Array.from({ length: 30 }, (_, index) => ({ agent: 'pi', model: `local-test-model-${index}`, tokPerSec: 10, latest: 10, samples: 1, estimated: false })),
-      agents: []
+      agents: Array.from({ length: 12 }, (_, index) => ({ id: null, key: `k${index}`, agent: 'dsh', cwd: `/work/a-rather-long-workspace-name-${index}`, state: 'idle', model: 'm', contextTokens: 1000 * index, contextWindow: 20_000, windowEstimated: false }))
     })
   )
-  assert.ok(long.tooltip.length <= 256)
-  assert.ok(long.text.length <= 64)
+  for (const item of [long.speed, long.context]) {
+    assert.ok(item.tooltip.length <= 256)
+    assert.ok(item.text.length <= 64)
+  }
+})
+
+test('consent: only the refusal for want of approval counts', () => {
+  assert.equal(isConsentError({ code: 'consent_required', message: 'plugin is not enabled with current consent' }), true)
+  assert.equal(isConsentError(new Error('plugin is not enabled with current consent')), true)
+  assert.equal(isConsentError({ code: 'invalid_params', message: 'unknown status bar item' }), false)
+  assert.equal(isConsentError(undefined), false)
 })
 
 test('change detection ignores the clock', () => {
@@ -511,6 +597,7 @@ test('change detection ignores the clock', () => {
   assert.equal(contentKey(first), contentKey(second))
   const moved = snapshotOf({ ...READER, models: [{ ...READER.models[0], tokPerSec: 41 }] }, { fetchedAt: 2 })
   assert.notEqual(contentKey(first), contentKey(moved))
+  assert.notEqual(contentKey(first), contentKey({ ...first, consentRequired: true }))
 })
 
 // --- manifest ------------------------------------------------------------------------
@@ -523,6 +610,8 @@ test('manifest: settings match the worker defaults and hold no real host', () =>
   assert.deepEqual(settings.period.enum, ['15m', '1h', '24h'])
   assert.deepEqual(settings.displayMode.enum, ['statusbar', 'panel'])
   assert.equal(settings.refreshSeconds.minimum, 5)
-  assert.equal(manifest.contributes.statusBarItems[0].id, 'meter')
+  // The worker updates the items by these ids, and each is pressable.
+  assert.deepEqual(manifest.contributes.statusBarItems.map((item) => item.id), STATUS_ITEMS)
+  for (const item of manifest.contributes.statusBarItems) assert.equal(item.command, manifest.contributes.commands[0].id)
   assert.equal(manifest.contributes.panels[0].title, 'パフォーマンス')
 })

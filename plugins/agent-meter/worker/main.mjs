@@ -25,7 +25,6 @@ const CLI_TIMEOUT_MS = 20_000
 const SSH_TIMEOUT_MS = 25_000
 const ENVIRONMENTS_TTL_MS = 60_000
 const TERMINALS_TTL_MS = 60_000
-const STATUS_ITEM = 'meter'
 /** Must match SENTINEL in reader/reader.mjs. */
 export const SENTINEL = 'AGENT_METER_RESULT '
 const NODE_MISSING = 'AGENT_METER_NODE_NOT_FOUND'
@@ -614,11 +613,56 @@ export function flattenAgents(listed) {
         state: String(agent.state ?? ''),
         cwd: worktree.path,
         name: String(worktree.displayName || baseName(worktree.path)),
+        title: cleanTitle(agent.displayName || agent.taskTitle),
         updatedAt: Number(agent.updatedAt) || 0
       })
     }
   }
   return agents
+}
+
+function cleanTitle(value) {
+  const flat = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat
+}
+
+/**
+ * Several agents in one workspace would be rows with the same name, so each gets a
+ * `sub`: its title when Orca has one (the agent's own, else its terminal's), and a
+ * number otherwise. Numbers follow the pane key, which does not change while the agent
+ * lives, so a row keeps its number from one refresh to the next. An agent alone in its
+ * workspace gets none.
+ */
+export function labelAgents(agents, terminalTitles = new Map()) {
+  const byWorkspace = new Map()
+  for (const agent of agents) {
+    const list = byWorkspace.get(agent.cwd) ?? []
+    list.push(agent)
+    byWorkspace.set(agent.cwd, list)
+  }
+  const subs = new Map()
+  for (const list of byWorkspace.values()) {
+    if (list.length < 2) continue
+    const ordered = [...list].sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+    const titles = ordered.map((agent) => agent.title || cleanTitle(terminalTitles.get(agent.id)))
+    ordered.forEach((agent, index) => {
+      const title = titles[index]
+      const shared = title !== '' && titles.filter((other) => other === title).length > 1
+      subs.set(agent.id, title === '' ? `#${index + 1}` : shared ? `${title} #${index + 1}` : title)
+    })
+  }
+  return agents.map((agent) => ({ ...agent, sub: subs.get(agent.id) ?? '' }))
+}
+
+/** `orca terminal list --json` → pane key (`tabId:leafId`) → terminal title, where set. */
+export function terminalTitles(listed) {
+  const titles = new Map()
+  for (const terminal of listed?.terminals ?? []) {
+    if (typeof terminal?.title !== 'string' || terminal.title.trim() === '') continue
+    if (typeof terminal.tabId !== 'string' || typeof terminal.leafId !== 'string') continue
+    titles.set(`${terminal.tabId}:${terminal.leafId}`, terminal.title)
+  }
+  return titles
 }
 
 /** `orca terminal list --json` → pane key (`tabId:leafId`) → terminal handle. */
@@ -675,6 +719,9 @@ export function buildGroups(reader, agents = [], handles = new Map()) {
     groupOf(row.agent, row.model).rows.push({
       id: row.id,
       name: known?.name ?? baseName(row.cwd ?? ''),
+      sub: known?.sub ?? '',
+      // Sessions Orca does not list (DSH) are told apart below, by directory and key.
+      unlisted: row.id === null ? { where: `${row.agent}\u0000${row.cwd ?? ''}`, key: String(row.key ?? '') } : null,
       state,
       working: state === 'working',
       tokens,
@@ -685,12 +732,26 @@ export function buildGroups(reader, agents = [], handles = new Map()) {
     })
   }
   const list = [...groups.values()]
+  const unlisted = new Map()
+  for (const row of list.flatMap((group) => group.rows)) {
+    if (!row.unlisted) continue
+    const rows = unlisted.get(row.unlisted.where) ?? []
+    rows.push(row)
+    unlisted.set(row.unlisted.where, rows)
+  }
+  for (const rows of unlisted.values()) {
+    if (rows.length < 2) continue
+    rows.sort((left, right) => left.unlisted.key.localeCompare(right.unlisted.key))
+    rows.forEach((row, index) => (row.sub = `#${index + 1}`))
+  }
   for (const group of list) {
+    for (const row of group.rows) delete row.unlisted
     group.rows.sort(
       (left, right) =>
         Number(right.working) - Number(left.working) ||
         (right.percent ?? -1) - (left.percent ?? -1) ||
-        left.name.localeCompare(right.name)
+        left.name.localeCompare(right.name) ||
+        left.sub.localeCompare(right.sub)
     )
   }
   return list.sort(
@@ -706,14 +767,11 @@ export function buildGroups(reader, agents = [], handles = new Map()) {
  *  in the period, and the fullest context among live agents. */
 export function summarize(groups) {
   const speeds = groups.map((group) => group.tokPerSec).filter((value) => typeof value === 'number')
-  let fullest = null
-  for (const group of groups) {
-    for (const row of group.rows) {
-      if (row.percent !== null && (fullest === null || row.percent > fullest.percent)) {
-        fullest = { percent: row.percent, name: row.name }
-      }
-    }
-  }
+  const fullest = groups
+    .flatMap((group) => group.rows)
+    .filter((row) => row.percent !== null)
+    .map((row) => ({ percent: row.percent, name: row.sub ? `${row.name} ${row.sub}` : row.name }))
+    .sort((left, right) => right.percent - left.percent)
   return { tokPerSec: median(speeds), fullest }
 }
 
@@ -727,36 +785,55 @@ function shortModel(model) {
   return String(model).replace(/^claude-/, '')
 }
 
-export function statusBarItem(snapshot) {
+/** The ids of `contributes.statusBarItems`. */
+export const STATUS_ITEMS = ['speed', 'context']
+
+/**
+ * The two status bar items. Orca gives an item one colour, so the speed and the context
+ * are separate items: a full context must not paint the speed red.
+ *
+ * - `speed`: the median tokens per second. Neutral; a warning only when the read failed.
+ * - `context`: the fullest context among live agents, amber from 70% and red from 90%,
+ *   with the fullest agents in its tooltip. Hidden while there is no percentage to show.
+ */
+export function statusBarItems(snapshot) {
+  const hidden = { visible: false }
   if (!snapshot.configured) {
-    return { text: '⚡ 未設定', tone: 'neutral', tooltip: 'Agent Meter: 設定で SSH 接続先を入れてください' }
-  }
-  if (snapshot.error) {
     return {
-      text: '⚡ 取得失敗',
-      tone: 'warning',
-      tooltip: oneLine(`Agent Meter: ${snapshot.error.message}`, 256)
+      speed: { text: '⚡ 未設定', tone: 'neutral', tooltip: 'Agent Meter: 設定で SSH 接続先を入れてください', visible: true },
+      context: hidden
     }
   }
   const { tokPerSec, fullest } = summarize(snapshot.groups)
-  const parts = [tokPerSec === null ? '⚡ —' : `⚡ ${Math.round(tokPerSec)} tok/s`]
-  if (fullest) parts.push(`◔ ${Math.round(fullest.percent)}%`)
-  const lines = snapshot.groups
+  const speedLines = snapshot.groups
     .filter((group) => group.tokPerSec !== null)
     .map(
       (group) =>
         `${AGENT_LABELS[group.agent] ?? group.agent} ${shortModel(group.model)} ` +
         `${group.estimated ? '≈' : ''}${Math.round(group.tokPerSec)} tok/s`
     )
-  if (fullest) lines.push(`最大 ${Math.round(fullest.percent)}% ${fullest.name}`)
-  const percent = fullest?.percent ?? 0
+  const speed = snapshot.error
+    ? { text: '⚡ 取得失敗', tone: 'warning', tooltip: oneLine(`Agent Meter: ${snapshot.error.message}`, 256) }
+    : {
+        text: tokPerSec === null ? '⚡ —' : `⚡ ${Math.round(tokPerSec)} tok/s`,
+        tone: 'neutral',
+        tooltip: oneLine(
+          `Agent Meter 出力速度（${PERIOD_LABELS[snapshot.period] ?? snapshot.period}）: ${speedLines.join(' / ') || 'データなし'}`,
+          256
+        )
+      }
+  if (fullest.length === 0) return { speed: { ...speed, visible: true }, context: hidden }
+  const percent = fullest[0].percent
+  const agents = fullest.slice(0, 6).map((entry) => `${entry.name} ${Math.round(entry.percent)}%`)
   return {
-    text: parts.join(' · '),
-    tone: percent >= DANGER_PERCENT ? 'danger' : percent >= WARN_PERCENT ? 'warning' : 'neutral',
-    tooltip: oneLine(
-      `Agent Meter（${PERIOD_LABELS[snapshot.period] ?? snapshot.period}）: ${lines.join(' / ') || 'データなし'}`,
-      256
-    )
+    speed: { ...speed, visible: true },
+    context: {
+      text: `◔ ${Math.round(percent)}%`,
+      tone: percent >= DANGER_PERCENT ? 'danger' : percent >= WARN_PERCENT ? 'warning' : 'neutral',
+      // After a failed read these are the figures of the last good one.
+      tooltip: oneLine(`Agent Meter コンテキスト${snapshot.error ? '（前回の値）' : ''}: ${agents.join(' / ')}`, 256),
+      visible: true
+    }
   }
 }
 
@@ -778,16 +855,23 @@ export const DEFAULTS = {
   refreshSeconds: 15
 }
 
+/** The settings as last read, kept for when Orca refuses to hand them out. */
+let knownSettings = {}
+
 async function readSettings(orca) {
-  const settings = { ...DEFAULTS }
+  const settings = { ...DEFAULTS, ...knownSettings }
+  let refused = false
   for (const key of Object.keys(DEFAULTS)) {
     try {
       const value = await orca.settings.get(key)
-      if (value !== undefined && value !== null) settings[key] = value
-    } catch {
-      // Keep the default.
+      settings[key] = value !== undefined && value !== null ? value : DEFAULTS[key]
+      knownSettings[key] = settings[key]
+    } catch (error) {
+      // Keep what was last read, else the default.
+      if (isConsentError(error)) refused = true
     }
   }
+  noteConsent(orca, 'settings', refused)
   settings.sshTarget = String(settings.sshTarget).trim()
   settings.environment = String(settings.environment).trim()
   if (!Object.hasOwn(PERIOD_LABELS, settings.period)) settings.period = DEFAULTS.period
@@ -803,10 +887,11 @@ let pollMs = DEFAULTS.refreshSeconds * 1000
 let building = null
 /** A setting changed while a refresh was in flight: its result is already stale. */
 let dirty = false
+/** Per status bar item, the update last sent, so an unchanged one is not sent again. */
+let lastStatusKeys = {}
 /** The snapshot last published. */
 let last = null
 let lastKey = ''
-let lastStatusKey = ''
 let lastLogLine = ''
 /** The failed ssh run last written to the log, so a failure that repeats is logged once. */
 let lastRunKey = ''
@@ -815,22 +900,87 @@ let panelSeenAt = 0
 /** Panel-only mode with no panel open: no timer runs until a panel asks again. */
 let paused = false
 let environment = { arg: 'local', label: 'local' }
-let terminals = { at: 0, environment: '', handles: new Map() }
+let terminals = { at: 0, environment: '', handles: new Map(), titles: new Map() }
 
 function hostHas(orca, method, sinceMinor) {
   if (typeof orca.host?.has === 'function') return orca.host.has(method)
   return orca.api.major > 1 || orca.api.minor >= sinceMinor
 }
 
-function updateStatusBar(orca, patch) {
+/** Orca refusing a call because the plugin's approval no longer matches its code or
+ *  capabilities, as after a development reload that changed them. */
+export function isConsentError(error) {
+  return error?.code === 'consent_required' || /not enabled with current consent/i.test(String(error?.message ?? ''))
+}
+
+/** Which kinds of call Orca is refusing for want of approval. */
+const refusedBy = { statusBar: false, settings: false, post: false }
+let lastStatusError = ''
+
+function consentRequired() {
+  return refusedBy.statusBar || refusedBy.settings || refusedBy.post
+}
+
+/**
+ * Records whether one kind of call was refused. Refusals repeat on every refresh until
+ * the person approves again, so the log gets one line when they start and one when they
+ * stop, and the panel is told so it can say what to do.
+ */
+function noteConsent(orca, source, refused) {
+  if (active !== orca) return
+  const before = consentRequired()
+  refusedBy[source] = refused
+  const now = consentRequired()
+  if (now === before) return
+  orca.log(
+    now
+      ? 'consent_required: Orca がこのプラグインを現在の承認で有効にしていません。承認をやり直してください（解消するまでこの行は繰り返しません）'
+      : 'consent: 承認が戻りました'
+  )
+  if (!last) return
+  last = { ...last, consentRequired: now }
+  lastKey = contentKey(last)
+  post(orca, 'snapshot', last)
+}
+
+/** Sends to open panels. A refusal is recorded, never thrown or logged over and over. */
+function post(orca, name, data) {
+  const failed = (error) => {
+    if (isConsentError(error)) noteConsent(orca, 'post', true)
+    else logOnce(orca, `post ERR ${error?.message ?? error}`)
+  }
+  try {
+    const sent = orca.panels.post(name, data)
+    if (sent && typeof sent.then === 'function') sent.then(() => noteConsent(orca, 'post', false), failed)
+    else noteConsent(orca, 'post', false)
+  } catch (error) {
+    failed(error)
+  }
+}
+
+function updateStatusBar(orca, id, patch) {
   if (!hostHas(orca, 'statusBar.update', 2)) return
   const key = JSON.stringify(patch)
-  if (key === lastStatusKey) return
-  lastStatusKey = key
-  orca.host.call('statusBar.update', { id: STATUS_ITEM, ...patch }).catch((error) => {
-    lastStatusKey = ''
-    orca.log(`statusBar.update ERR ${error.code ?? '-'} ${error.message}`)
-  })
+  if (key === lastStatusKeys[id]) return
+  lastStatusKeys[id] = key
+  orca.host.call('statusBar.update', { id, ...patch }).then(
+    () => {
+      lastStatusError = ''
+      noteConsent(orca, 'statusBar', false)
+    },
+    (error) => {
+      // Tried again on the next refresh, so it recovers by itself once the cause is gone.
+      delete lastStatusKeys[id]
+      if (isConsentError(error)) {
+        noteConsent(orca, 'statusBar', true)
+        return
+      }
+      const line = `statusBar.update ERR ${error.code ?? '-'} ${error.message}`
+      if (line === lastStatusError) return
+      lastStatusError = line
+      orca.log(line)
+    }
+  )
 }
 
 function logOnce(orca, line) {
@@ -850,32 +1000,41 @@ function logRun(orca, run) {
   for (const line of lines) orca.log(line)
 }
 
-function publish(orca, snapshot, settings) {
-  if (active !== orca) return
-  last = snapshot
-  // Every field goes out each time: an omitted one would keep its old value.
-  updateStatusBar(orca, { ...statusBarItem(snapshot), visible: settings.displayMode !== 'panel' })
-  const key = contentKey(snapshot)
-  try {
-    if (key !== lastKey) {
-      lastKey = key
-      orca.panels.post('snapshot', snapshot)
-    } else {
-      // Nothing changed; the panel only needs to know the read happened.
-      orca.panels.post('tick', { fetchedAt: snapshot.fetchedAt })
-    }
-  } catch (error) {
-    orca.log(`post ERR ${error.message}`)
+/** Updates both status bar items; with `shown` false (panel-only mode) both are hidden. */
+function showStatusBar(orca, snapshot, shown) {
+  const items = shown && snapshot ? statusBarItems(snapshot) : {}
+  for (const id of STATUS_ITEMS) {
+    // Every field goes out each time: an omitted one would keep its old value.
+    updateStatusBar(orca, id, items[id] ?? { visible: false })
   }
 }
 
-async function readHandles(target) {
-  if (terminals.environment === target && Date.now() - terminals.at < TERMINALS_TTL_MS) {
-    return terminals.handles
+function publish(orca, built, settings) {
+  if (active !== orca) return
+  const snapshot = { ...built, consentRequired: consentRequired() }
+  last = snapshot
+  showStatusBar(orca, snapshot, settings.displayMode !== 'panel')
+  const key = contentKey(snapshot)
+  if (key !== lastKey) {
+    lastKey = key
+    post(orca, 'snapshot', snapshot)
+  } else {
+    // Nothing changed; the panel only needs to know the read happened.
+    post(orca, 'tick', { fetchedAt: snapshot.fetchedAt })
   }
+}
+
+/** → `{ handles, titles }` of the server's terminals, by pane key. */
+async function readTerminals(target) {
+  if (terminals.environment === target && Date.now() - terminals.at < TERMINALS_TTL_MS) return terminals
   const listed = await runCli(['terminal', 'list', '--json', '--environment', target, '--limit', '500'])
-  terminals = { at: Date.now(), environment: target, handles: terminalHandles(listed) }
-  return terminals.handles
+  terminals = {
+    at: Date.now(),
+    environment: target,
+    handles: terminalHandles(listed),
+    titles: terminalTitles(listed)
+  }
+  return terminals
 }
 
 async function build(orca, settings) {
@@ -900,8 +1059,9 @@ async function build(orca, settings) {
       const direct = settings.environment !== '' && SAFE_ARG.test(settings.environment)
       environment = pickEnvironment(settings.environment, direct ? [] : await listEnvironments())
       const listed = await runCli(['worktree', 'ps', '--json', '--environment', environment.arg, '--limit', '200'])
-      agents = flattenAgents(listed)
-      handles = await readHandles(environment.arg).catch(() => new Map())
+      const known = await readTerminals(environment.arg).catch(() => ({ handles: new Map(), titles: new Map() }))
+      handles = known.handles
+      agents = labelAgents(flattenAgents(listed), known.titles)
     } catch (error) {
       // The speeds do not depend on Orca's list, so keep going without it.
       base.notice = `エージェント一覧を取得できません: ${error.message}`
@@ -984,7 +1144,7 @@ async function tick(orca) {
       // Panel-only mode with no panel open: nothing is on screen, so nothing is read
       // and no timer is left running. A panel that opens, or a setting, starts it again.
       paused = true
-      updateStatusBar(orca, { visible: false })
+      showStatusBar(orca, null, false)
     }
   } catch (error) {
     orca.log(`tick ERR ${error.message}`)
@@ -1017,9 +1177,12 @@ export default function activate(orca) {
   dirty = false
   last = null
   lastKey = ''
-  lastStatusKey = ''
+  lastStatusKeys = {}
+  lastStatusError = ''
   lastLogLine = ''
   lastRunKey = ''
+  knownSettings = {}
+  refusedBy.statusBar = refusedBy.settings = refusedBy.post = false
   panelSeenAt = 0
   paused = false
 

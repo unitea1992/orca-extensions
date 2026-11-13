@@ -421,6 +421,7 @@ test('collect: speeds per model and a context per live agent', async () => {
       assert.equal(speed['dsh/dsh-test-1'].tokPerSec, 100)
       assert.deepEqual(agents['dsh:/work/gamma'], {
         id: null,
+        key: 'session-fixture',
         agent: 'dsh',
         cwd: '/work/gamma',
         state: 'idle',

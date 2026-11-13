@@ -38,11 +38,41 @@
       ]
     },
     {
+      "path": "/work/delta",
+      "displayName": "develop",
+      "agents": [
+        {
+          "paneKey": "tab-5:leaf-b",
+          "agentType": "claude",
+          "state": "done",
+          "displayName": null,
+          "taskTitle": null,
+          "updatedAt": 1768471200000
+        },
+        {
+          "paneKey": "tab-5:leaf-a",
+          "agentType": "claude",
+          "state": "done",
+          "displayName": "Fix   login\nflow",
+          "taskTitle": "Fix login flow",
+          "updatedAt": 1768471200000
+        },
+        {
+          "paneKey": "tab-6:leaf-a",
+          "agentType": "codex",
+          "state": "done",
+          "displayName": null,
+          "taskTitle": null,
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
       "path": "/work/empty",
       "displayName": "empty",
       "agents": []
     }
   ],
-  "totalCount": 3,
+  "totalCount": 4,
   "truncated": false
 }
