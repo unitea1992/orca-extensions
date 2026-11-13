@@ -517,8 +517,17 @@ function walkRollouts(dir, out, depth = 0) {
   }
 }
 
-/** What the start of a rollout says: where it ran, whether it is a subagent's thread,
- *  and the model of its first turn. */
+/**
+ * Model names Codex uses for its own side work, such as the automatic review of a
+ * command before it runs. They are not a model anyone chose, so they get no speed.
+ */
+export function isInternalCodexModel(model) {
+  return /^codex-auto-/.test(String(model))
+}
+
+/** What the start of a rollout says: where it ran, whether it is a child thread (a
+ *  subagent, or Codex's automatic review) rather than an agent of its own, and the
+ *  model of its first turn. */
 export function parseCodexHead(text) {
   const head = { cwd: null, subagent: false, model: null }
   for (const record of jsonLines(text)) {
@@ -528,7 +537,8 @@ export function parseCodexHead(text) {
       const threadSource = payload.thread_source
       head.subagent =
         (typeof threadSource === 'string' && threadSource !== 'user') ||
-        (isRecord(payload.source) && 'subagent' in payload.source)
+        (isRecord(payload.source) && 'subagent' in payload.source) ||
+        (typeof payload.parent_thread_id === 'string' && payload.parent_thread_id !== '')
     } else if (record.type === 'turn_context' && typeof payload.model === 'string') {
       head.model = payload.model
       break
@@ -687,8 +697,9 @@ function collectCodex(run) {
     }
     if (item.mtime >= run.since) {
       const result = parse(item)
-      if (result) run.samples.push(...result.samples)
+      if (result) run.samples.push(...result.samples.filter((entry) => !isInternalCodexModel(entry.model)))
     }
+    // A child thread is not an agent: it counts for its model's speed, never as a row.
     if (!item.head.subagent && item.head.cwd !== null && wanted.has(item.head.cwd)) {
       const list = sessions.get(item.head.cwd) ?? []
       list.push(item)

@@ -160,13 +160,24 @@ write('codex/rollout-old.jsonl', [
   tokenCount(612_050, 10_200, { output_tokens: 100, reasoning_output_tokens: 0, total_tokens: 5200 }, { last_usage_includes_reasoning: false })
 ])
 
+// Codex's automatic review of a command: a child thread under an internal model name.
 write('codex/rollout-subagent.jsonl', [
-  codex(40_000, 'session_meta', { id: 'thread-sub', cwd: '/work/alpha', originator: 'fixture', source: { subagent: { other: 'fixture' } }, thread_source: 'guardian_review' }),
-  codex(40_100, 'turn_context', { model: 'gpt-test-review' }),
+  codex(40_000, 'session_meta', { id: 'thread-sub', cwd: '/work/alpha', originator: 'fixture', source: { subagent: { other: 'fixture' } }, thread_source: 'guardian_review', parent_thread_id: 'thread-new' }),
+  codex(40_100, 'turn_context', { model: 'codex-auto-review' }),
   codex(40_200, 'event_msg', { type: 'task_started', model_context_window: 100_000 }),
   codex(41_200, 'response_item', { type: 'message', role: 'assistant' }),
   codex(41_200, 'token_usage_record', { response_id: 'resp-s' }),
   tokenCount(41_210, 900, { output_tokens: 100, reasoning_output_tokens: 0, total_tokens: 900 }, { last_usage_includes_reasoning: true })
+])
+
+// A child thread marked only by its parent, running an ordinary model.
+write('codex/rollout-child.jsonl', [
+  codex(50_000, 'session_meta', { id: 'thread-child', cwd: '/work/alpha', originator: 'fixture', source: 'cli', parent_thread_id: 'thread-new' }),
+  codex(50_100, 'turn_context', { model: 'gpt-test-1' }),
+  codex(50_200, 'event_msg', { type: 'task_started', model_context_window: 400_000 }),
+  codex(52_200, 'response_item', { type: 'message', role: 'assistant' }),
+  codex(52_200, 'token_usage_record', { response_id: 'resp-c' }),
+  tokenCount(52_210, 390_000, { output_tokens: 250, reasoning_output_tokens: 0, total_tokens: 390_000 }, { last_usage_includes_reasoning: true, model_context_window: 400_000 })
 ])
 
 // --- pi ----------------------------------------------------------------------

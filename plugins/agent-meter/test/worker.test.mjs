@@ -540,7 +540,8 @@ const WS = {
 }
 const picked = (workspaces, row, hosts) => {
   const found = pickWorkspace(workspaces, row, hosts)
-  return found ? [found.how, found.entry.id] : null
+  if (!found) return null
+  return found.entry ? [found.how, found.entry.id] : [found.how, null, found.count]
 }
 
 test('workspace: found by the server id, a part of it, the path, or the name', () => {
@@ -574,7 +575,16 @@ test('workspace: found by the server id, a part of it, the path, or the name', (
   assert.deepEqual(picked([moved], { ...row, keys: [] }), ['name', 'ws-moved'])
   assert.deepEqual(picked([{ ...moved, path: '/mnt/x' }], { ...row, keys: [] }), ['name', 'ws-moved'])
   assert.equal(picked([{ ...moved, path: '/mnt/x', project: 'unrelated' }], { ...row, keys: [] }), null)
-  assert.equal(picked([{ ...moved, name: 'beta' }], { ...row, keys: [] }), null)
+  // 5. Nothing but the folder name agrees: opened when that leaves exactly one.
+  assert.deepEqual(picked([{ ...moved, name: 'beta' }], { ...row, keys: [] }), ['folder', 'ws-moved'])
+  assert.deepEqual(picked([{ ...moved, name: 'beta', path: '', id: 'remote:/srv/x/alpha' }], { ...row, keys: [] }), ['folder', 'remote:/srv/x/alpha'])
+  const twin = { ...moved, id: 'ws-twin', name: 'gamma', path: '/elsewhere/alpha', hostId: 'env-2' }
+  // On the paired server only one has it.
+  assert.deepEqual(picked([{ ...moved, name: 'beta' }, twin], { ...row, keys: [] }), ['folder', 'ws-moved'])
+  // Several, and no way to choose: none is opened, and the count is given.
+  assert.deepEqual(picked([{ ...moved, name: 'beta' }, twin], { ...row, keys: [], hosts: [] }), ['folder', null, 2])
+  assert.deepEqual(picked([{ ...moved, name: 'beta' }, { ...twin, hostId: 'env-1' }], { ...row, keys: [] }), ['folder', null, 2])
+  assert.equal(picked([{ ...moved, name: 'beta', path: '/mnt/alpha-two' }], { ...row, keys: [] }), null)
 })
 
 test('workspace: the same path on several hosts goes to the paired server', () => {

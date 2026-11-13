@@ -15,6 +15,7 @@ import {
   dshStreamEnd,
   dshTokens,
   eligible,
+  isInternalCodexModel,
   jsonLines,
   median,
   opencodeMessage,
@@ -157,8 +158,17 @@ test('codex: head gives cwd, subagent flag and first model', () => {
     subagent: false,
     model: 'gpt-test-1'
   })
+  // A child thread is marked by where it came from, or only by having a parent.
   assert.equal(parseCodexHead(fixture('codex/rollout-subagent.jsonl')).subagent, true)
+  assert.equal(parseCodexHead(fixture('codex/rollout-child.jsonl')).subagent, true)
   assert.equal(parseCodexHead(fixture('codex/rollout-old.jsonl')).subagent, false)
+})
+
+test('codex: internal model names are told from chosen ones', () => {
+  assert.equal(isInternalCodexModel('codex-auto-review'), true)
+  assert.equal(isInternalCodexModel('gpt-test-1'), false)
+  assert.equal(isInternalCodexModel('gpt-test-codex'), false)
+  assert.equal(isInternalCodexModel(undefined), false)
 })
 
 test('codex: a response is timed without the tool run that follows it', () => {
@@ -313,8 +323,10 @@ async function buildHome() {
   }
   place(home, '.codex/sessions/2026/01/15/rollout-fixture-new.jsonl', 'codex/rollout-new.jsonl', at)
   place(home, '.config/orca/codex-accounts/acc/home/sessions/2026/01/15/rollout-fixture-old.jsonl', 'codex/rollout-old.jsonl', T0 + 700_000)
-  // Newer than the user's own thread in the same directory.
+  // Child threads, both newer than the user's own thread in the same directory: the
+  // automatic review, and one that is marked only by its parent and is nearly full.
   place(home, '.config/orca/codex-accounts/acc/home/sessions/2026/01/15/rollout-fixture-sub.jsonl', 'codex/rollout-subagent.jsonl', at + 5000)
+  place(home, '.config/orca/codex-accounts/acc/home/sessions/2026/01/15/rollout-fixture-child.jsonl', 'codex/rollout-child.jsonl', at + 6000)
   place(home, '.pi/agent/sessions/--work-alpha--/session.jsonl', 'pi/session.jsonl', at)
   place(home, '.pi/agent/models.json', 'pi/models.json', at)
   place(home, '.config/opencode/opencode.json', 'opencode/opencode.json', at)
@@ -370,11 +382,14 @@ test('collect: speeds per model and a context per live agent', async () => {
       { tokPerSec: 100, samples: 4, estimated: true }
     )
     assert.equal(speed['claude/claude-test-mini'].tokPerSec, 150)
+    // The child thread's response counts for the model it ran: 100, 50 and its 125.
     assert.deepEqual(
       { tokPerSec: speed['codex/gpt-test-1'].tokPerSec, latest: speed['codex/gpt-test-1'].latest, samples: speed['codex/gpt-test-1'].samples },
-      { tokPerSec: 75, latest: 50, samples: 2 }
+      { tokPerSec: 100, latest: 125, samples: 3 }
     )
-    assert.equal(speed['codex/gpt-test-review'].tokPerSec, 100)
+    // Codex's automatic review runs under an internal name: no speed is shown for it.
+    assert.equal(Object.keys(speed).some((key) => key.includes('codex-auto-review')), false)
+    assert.deepEqual(Object.keys(speed).filter((key) => key.startsWith('codex/')).sort(), ['codex/gpt-test-1', 'codex/gpt-test-2'])
     // The rollout without token_usage_record, from the Orca account folder.
     assert.equal(speed['codex/gpt-test-2'].tokPerSec, 87.5)
     assert.deepEqual(
@@ -393,7 +408,8 @@ test('collect: speeds per model and a context per live agent', async () => {
       { model: agents['c-none'].model, tokens: agents['c-none'].contextTokens },
       { model: null, tokens: null }
     )
-    // The subagent's rollout is newer but is not the agent's own thread.
+    // The child threads are newer, and one is at 98%, but neither is the agent's own
+    // thread: the row shows the agent's context, and no row is made for them.
     assert.deepEqual(
       { model: agents['x-alpha'].model, tokens: agents['x-alpha'].contextTokens, window: agents['x-alpha'].contextWindow },
       { model: 'gpt-test-1', tokens: 100_800, window: 400_000 }
@@ -403,6 +419,7 @@ test('collect: speeds per model and a context per live agent', async () => {
       { tokens: 31_000, window: 100_000 }
     )
     assert.equal('ignored' in agents, false)
+    assert.equal(result.agents.filter((row) => row.agent === 'codex').length, 1)
 
     if (hasSqlite) {
       assert.deepEqual(

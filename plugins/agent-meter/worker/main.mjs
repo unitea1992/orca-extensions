@@ -731,10 +731,13 @@ function distinctive(key) {
  * 3. `path`: the same path. A repository's main checkout is a workspace like any
  *    other, so the kind is not looked at.
  * 4. `name`: the same workspace name, in a folder or project of the same name.
+ * 5. `folder`: nothing but the folder name agrees. This one opens only when a single
+ *    workspace is left (on the paired server, if any is there); with several it
+ *    answers `{ entry: null, how: 'folder', count }` and nothing is opened.
  *
- * Where a way finds several (the same path here and on a server), the one whose
- * `hostId` is among the names the paired server goes by is taken, else a remote one,
- * else the first.
+ * Where one of the first four finds several (the same path here and on a server), the
+ * one whose `hostId` is among the names the paired server goes by is taken, else a
+ * remote one, else the first.
  */
 export function pickWorkspace(workspaces, row, extraHosts = []) {
   const list = Array.isArray(workspaces) ? workspaces.filter((entry) => typeof entry?.id === 'string') : []
@@ -769,7 +772,14 @@ export function pickWorkspace(workspaces, row, extraHosts = []) {
       found[0]
     return { entry, how }
   }
-  return null
+  if (folder === '') return null
+  const sameFolder = list.filter(
+    (entry) => baseName(normalPath(entry.path)) === folder || normalPath(entry.id).endsWith(`/${folder}`)
+  )
+  const onServer = sameFolder.filter((entry) => typeof entry.hostId === 'string' && hosts.includes(entry.hostId))
+  const left = onServer.length > 0 ? onServer : sameFolder
+  if (left.length === 0) return null
+  return left.length === 1 ? { entry: left[0], how: 'folder' } : { entry: null, how: 'folder', count: left.length }
 }
 
 /**
@@ -1087,10 +1097,15 @@ async function openRow(orca, input) {
     try {
       const listed = await orca.host.call('workspace.list', {})
       const found = pickWorkspace(listed?.workspaces, row, pairing)
-      if (found) {
+      if (found?.entry) {
         orca.log(`open: ${found.how} で一致 id=${JSON.stringify(found.entry.id)} hostId=${JSON.stringify(found.entry.hostId ?? null)}`)
         await orca.host.call('workspace.open', { workspaceId: found.entry.id })
         opened = true
+      } else if (found) {
+        // Only the folder name agrees, and for more than one: opening a guess is worse
+        // than opening nothing.
+        for (const line of describeWorkspaceMiss(listed, row, pairing)) orca.log(line)
+        reason = `フォルダ名が ${baseName(normalPath(row.path))} のワークスペースが ${found.count} 件あり、どれか決められません。詳細は orca plugin logs に出ています`
       } else {
         for (const line of describeWorkspaceMiss(listed, row, pairing)) orca.log(line)
         reason =

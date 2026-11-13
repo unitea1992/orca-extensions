@@ -264,6 +264,22 @@ test('pressing a row opens its workspace on this desktop', { skip, timeout: 60_0
   assert.equal(logs[0], 'open: ワークスペースが見つかりません workspace.list=3件 truncated=false hostId別={"null":1,"env-1":2}')
   assert.equal(logs[1], 'open: 探したキー name="develop" path="/work/none" repo="" keys=["repo-9::/work/none"] hosts=["env-1","local"]')
   assert.equal(logs.length, 6)
+  // Only the folder name agrees, for two workspaces: neither is opened.
+  workspaces.push(
+    { id: 'ws-a', kind: 'worktree', name: 'one', path: '/srv/a/shared', branch: null, hostId: 'env-1' },
+    { id: 'ws-b', kind: 'worktree', name: 'two', path: '/srv/b/shared', branch: null, hostId: 'env-1' }
+  )
+  hostCalls.length = 0
+  await assert.rejects(
+    open({ id: 'x', name: 'develop', path: '/work/shared', keys: [], hosts: ['env-1'] }),
+    /フォルダ名が shared のワークスペースが 2 件あり、どれか決められません/
+  )
+  assert.deepEqual(hostCalls, [['workspace.list', {}]])
+  // With one, it opens.
+  workspaces.pop()
+  await open({ id: 'x', name: 'develop', path: '/work/shared', keys: [], hosts: ['env-1'] })
+  assert.deepEqual(hostCalls.at(-1), ['workspace.open', { workspaceId: 'ws-a' }])
+  workspaces.pop()
   // The desktop cut its list short: the workspace may simply not be in it.
   truncated = true
   try {
