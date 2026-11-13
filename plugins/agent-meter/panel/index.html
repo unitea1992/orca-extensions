@@ -257,7 +257,7 @@
         element.addEventListener('click', () => {
           el.notice.hidden = true
           void orca.plugin
-            .request('row.open', { id: row.id, worktreeId: row.worktreeId, path: row.path })
+            .request('row.open', { id: row.id, name: row.name, path: row.path, repo: row.repo, keys: row.keys, hosts: row.hosts })
             .catch((error) => {
               el.notice.textContent = String(error?.message ?? error)
               el.notice.hidden = false

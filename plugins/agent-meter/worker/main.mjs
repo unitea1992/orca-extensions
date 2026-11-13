@@ -528,7 +528,12 @@ function runCli(args, timeout = CLI_TIMEOUT_MS) {
         reject(fail('action_failed', `orca ${args.slice(0, 2).join(' ')}: ${detail}`))
         return
       }
-      resolve(payload.result ?? payload)
+      const result = payload.result ?? payload
+      // The envelope names the runtime that answered: one more way a host may be called.
+      if (payload._meta && typeof result === 'object' && result !== null && result._meta === undefined) {
+        result._meta = payload._meta
+      }
+      resolve(result)
     }
     if (process.platform === 'win32') {
       // An npm .cmd shim cannot be spawned without a shell. `exec` takes one command
@@ -599,8 +604,24 @@ const LISTED_AGENTS = new Set(['claude', 'codex', 'pi', 'opencode'])
 /** `orca worktree ps --json` → the live agents the reader pairs with session logs. */
 export function flattenAgents(listed) {
   const agents = []
+  const strings = (values) => [...new Set(values.filter((value) => typeof value === 'string' && value !== ''))]
   for (const worktree of listed?.worktrees ?? []) {
     if (typeof worktree?.path !== 'string') continue
+    // Everything the server calls this worktree and its host. Which of these the
+    // desktop's `workspace.list` uses is not documented, so a click tries them all.
+    const keys = strings([
+      worktree.worktreeId,
+      worktree.identity?.key,
+      worktree.identity?.instanceId,
+      worktree.worktreeInstanceId
+    ])
+    const hosts = strings([
+      worktree.environment?.id,
+      worktree.environment?.name,
+      worktree.hostId,
+      worktree.identity?.executionHostId,
+      listed?._meta?.runtimeId
+    ])
     for (const agent of worktree.agents ?? []) {
       if (!LISTED_AGENTS.has(agent?.agentType) || typeof agent.paneKey !== 'string') continue
       agents.push({
@@ -608,7 +629,9 @@ export function flattenAgents(listed) {
         type: agent.agentType,
         state: String(agent.state ?? ''),
         cwd: worktree.path,
-        worktreeId: typeof worktree.worktreeId === 'string' ? worktree.worktreeId : '',
+        keys,
+        hosts,
+        repo: typeof worktree.repo === 'string' ? worktree.repo : '',
         name: String(worktree.displayName || baseName(worktree.path)),
         title: cleanTitle(agent.displayName || agent.taskTitle),
         updatedAt: Number(agent.updatedAt) || 0
@@ -681,33 +704,100 @@ function order(agent) {
   return index === -1 ? AGENT_ORDER.length : index
 }
 
-function samePath(left, right) {
-  const trim = (value) => String(value ?? '').replace(/[\\/]+$/, '')
-  return trim(left) !== '' && trim(left) === trim(right)
+/** A path as compared between hosts: either separator, no trailing one. Case is kept:
+ *  the agents run on Linux. */
+function normalPath(value) {
+  return String(value ?? '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+}
+
+/** A string long enough to stand for one worktree when found inside a longer id. */
+function distinctive(key) {
+  return key.length >= 12
 }
 
 /**
  * The workspace of this desktop's Orca that a row stands for, from `workspace.list`.
+ * → `{ entry, how }`, or null.
  *
  * The row comes from the server (`orca worktree ps`, or a session log), the list from
- * this desktop, and nothing says outright which entry is which. The server's own id for
- * the worktree settles it when the desktop uses the same one. Otherwise the path does,
- * and when the same path exists on several hosts, the one on the paired server the
- * plugin reads (`hosts`: its environment id and name), else any remote one, is taken
- * before a local one.
+ * this desktop, and nothing documents which field of one equals which of the other. So
+ * the ways are tried from the surest down:
+ *
+ * 1. `id`: the workspace id is one of the server's own ids for the worktree.
+ * 2. `id-part`: the workspace id contains one of them, or ends in `::<path>`, the tail
+ *    of the server's `<repoId>::<path>`.
+ * 3. `path`: the same path. A repository's main checkout is a workspace like any
+ *    other, so the kind is not looked at.
+ * 4. `name`: the same workspace name, in a folder or project of the same name.
+ *
+ * Where a way finds several (the same path here and on a server), the one whose
+ * `hostId` is among the names the paired server goes by is taken, else a remote one,
+ * else the first.
  */
-export function pickWorkspace(workspaces, { worktreeId = '', path = '' }, hosts = []) {
+export function pickWorkspace(workspaces, row, extraHosts = []) {
   const list = Array.isArray(workspaces) ? workspaces.filter((entry) => typeof entry?.id === 'string') : []
-  const byId = worktreeId === '' ? undefined : list.find((entry) => entry.id === worktreeId)
-  if (byId) return byId
-  const byPath = list.filter((entry) => samePath(entry.path, path))
-  if (byPath.length < 2) return byPath[0] ?? null
-  const wanted = hosts.filter(Boolean)
-  return (
-    byPath.find((entry) => entry.hostId !== null && wanted.includes(entry.hostId)) ??
-    byPath.find((entry) => entry.hostId !== null && entry.hostId !== undefined) ??
-    byPath[0]
+  const keys = (row.keys ?? []).filter(Boolean)
+  const path = normalPath(row.path)
+  const folder = baseName(path)
+  const hosts = [...(row.hosts ?? []), ...extraHosts].filter(Boolean)
+  const ways = [
+    ['id', (entry) => keys.includes(entry.id)],
+    [
+      'id-part',
+      (entry) =>
+        keys.some((key) => distinctive(key) && entry.id.includes(key)) ||
+        (path !== '' && normalPath(entry.id).endsWith(`::${path}`))
+    ],
+    ['path', (entry) => path !== '' && normalPath(entry.path) === path],
+    [
+      'name',
+      (entry) =>
+        Boolean(row.name) &&
+        entry.name === row.name &&
+        folder !== '' &&
+        (baseName(normalPath(entry.path)) === folder || entry.project === folder || (Boolean(row.repo) && entry.project === row.repo))
+    ]
+  ]
+  for (const [how, matches] of ways) {
+    const found = list.filter(matches)
+    if (found.length === 0) continue
+    const entry =
+      found.find((candidate) => typeof candidate.hostId === 'string' && hosts.includes(candidate.hostId)) ??
+      found.find((candidate) => typeof candidate.hostId === 'string') ??
+      found[0]
+    return { entry, how }
+  }
+  return null
+}
+
+/**
+ * Why a row's workspace was not found, as log lines: how many workspaces the desktop
+ * listed and on which hosts, what was looked for, and the entries that come closest
+ * (the same folder name or workspace name, else the first few). The log stays on this
+ * machine, so the values are written as they are.
+ */
+export function describeWorkspaceMiss(listed, row, extraHosts = []) {
+  const list = Array.isArray(listed?.workspaces) ? listed.workspaces : []
+  const folder = baseName(normalPath(row.path))
+  const hostCounts = new Map()
+  for (const entry of list) hostCounts.set(String(entry?.hostId), (hostCounts.get(String(entry?.hostId)) ?? 0) + 1)
+  const near = list.filter(
+    (entry) =>
+      (folder !== '' && (baseName(normalPath(entry?.path)) === folder || String(entry?.id).endsWith(folder) || entry?.project === folder)) ||
+      (Boolean(row.name) && entry?.name === row.name)
   )
+  const shown = (near.length > 0 ? near : list).slice(0, 10)
+  return [
+    `open: ワークスペースが見つかりません workspace.list=${list.length}件 truncated=${listed?.truncated === true} hostId別=${JSON.stringify(Object.fromEntries(hostCounts))}`,
+    `open: 探したキー name=${JSON.stringify(row.name ?? '')} path=${JSON.stringify(row.path ?? '')} repo=${JSON.stringify(row.repo ?? '')} keys=${JSON.stringify(row.keys ?? [])} hosts=${JSON.stringify([...new Set([...(row.hosts ?? []), ...extraHosts].filter(Boolean))])}`,
+    `open: ${near.length > 0 ? `近い候補 ${near.length}件` : '近い候補なし。先頭'}（${shown.length}件を表示）`,
+    ...shown.map(
+      (entry) =>
+        `open:   id=${JSON.stringify(entry?.id)} kind=${entry?.kind} hostId=${JSON.stringify(entry?.hostId)} name=${JSON.stringify(entry?.name)} project=${JSON.stringify(entry?.project ?? null)} branch=${JSON.stringify(entry?.branch ?? null)} path=${JSON.stringify(entry?.path)}`
+    )
+  ].map((line) => line.slice(0, 2000))
 }
 
 /** Reader result + Orca's agent list → groups per model with their live agents. */
@@ -749,7 +839,9 @@ export function buildGroups(reader, agents = []) {
       windowEstimated: Boolean(row.windowEstimated),
       // What a click needs to find the workspace on this desktop.
       path: known?.cwd ?? row.cwd ?? '',
-      worktreeId: known?.worktreeId ?? ''
+      keys: known?.keys ?? [],
+      hosts: known?.hosts ?? [],
+      repo: known?.repo ?? ''
     })
   }
   const list = [...groups.values()]
@@ -975,7 +1067,17 @@ export function snapshotFor(orca, force = false) {
  * terminal brought forward as well.
  */
 async function openRow(orca, input) {
-  const row = { id: input?.id ?? null, worktreeId: String(input?.worktreeId ?? ''), path: String(input?.path ?? '') }
+  const texts = (value) => (Array.isArray(value) ? value.filter((entry) => typeof entry === 'string') : [])
+  const row = {
+    id: input?.id ?? null,
+    name: String(input?.name ?? ''),
+    path: String(input?.path ?? ''),
+    repo: String(input?.repo ?? ''),
+    keys: texts(input?.keys),
+    hosts: texts(input?.hosts)
+  }
+  // The pairing as this desktop names it, on top of what the server said of itself.
+  const pairing = [environment.arg, environment.label]
   let opened = false
   let reason = ''
   const granted = (kind) => orca.grantedCapabilities.includes(kind)
@@ -984,12 +1086,19 @@ async function openRow(orca, input) {
   } else {
     try {
       const listed = await orca.host.call('workspace.list', {})
-      const workspace = pickWorkspace(listed?.workspaces, row, [environment.arg, environment.label])
-      if (workspace) {
-        await orca.host.call('workspace.open', { workspaceId: workspace.id })
+      const found = pickWorkspace(listed?.workspaces, row, pairing)
+      if (found) {
+        orca.log(`open: ${found.how} で一致 id=${JSON.stringify(found.entry.id)} hostId=${JSON.stringify(found.entry.hostId ?? null)}`)
+        await orca.host.call('workspace.open', { workspaceId: found.entry.id })
         opened = true
       } else {
-        reason = `この Orca に ${baseName(row.path) || 'その'} のワークスペースが見つかりません`
+        for (const line of describeWorkspaceMiss(listed, row, pairing)) orca.log(line)
+        reason =
+          `この Orca に ${row.name || baseName(row.path) || 'その'} のワークスペースが見つかりません` +
+          (listed?.truncated === true
+            ? '（Orca がワークスペースの一覧を途中で打ち切っているので、一覧に入っていない可能性があります）'
+            : '') +
+          '。詳細は orca plugin logs に出ています'
       }
     } catch (error) {
       reason = isConsentError(error)

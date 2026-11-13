@@ -304,6 +304,11 @@ writeFileSync(
         {
           path: '/work/alpha',
           worktreeId: 'repo-1::/work/alpha',
+          worktreeInstanceId: 'instance-alpha-0001',
+          identity: { key: 'wt2:local:instance-alpha-0001', executionHostId: 'local', instanceId: 'instance-alpha-0001' },
+          hostId: 'local',
+          environment: { id: 'env-1', name: 'my server' },
+          repo: 'alpha-repo',
           displayName: 'alpha',
           agents: [
             { paneKey: 'tab-1:leaf-1', agentType: 'claude', state: 'working', updatedAt: T0 + 5000, children: [] },
@@ -324,6 +329,7 @@ writeFileSync(
         },
         { path: '/work/empty', displayName: 'empty', agents: [] }
       ],
+      _meta: { runtimeId: 'runtime-1' },
       totalCount: 4,
       truncated: false
     },
