@@ -12,11 +12,42 @@
         "ref": "main",
         "path": "plugins/gate-inbox"
       },
-      "description": "Gate Inbox: Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする。",
+      "description": "Gate Inbox: Orca の決定ゲート（確認待ち）を右サイドバーに積み、番号＋一言の回答行を Run ごとにコピーする。件数をステータスバーに出し、新着を通知する。",
       "categories": [
         "productivity"
       ],
       "releases": [
+        {
+          "version": "0.2.0",
+          "commit": "78182bbef509231577cb0e040a9aba714f50e8d8",
+          "contentHash": "2bea5e01db7973f9b971c20b3f1d798fac638c3841d56f99a9692e4df4882bac",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Gate Inbox",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "Gate Inbox"
+            },
+            {
+              "kind": "commands",
+              "name": "Gate Inbox: 右サイドバーを開閉"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "確認待ち"
+            }
+          ],
+          "capabilities": [
+            "settings:own",
+            "storage:own",
+            "notifications:show"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-13",
+          "changelog": "確認待ちの件数をステータスバーに出し（設定で切れる）、新しい確認待ちをデスクトップ通知する。ペアリング名に空白や日本語があると読めない不具合、読み取りの一時的な失敗で一覧が消える不具合を直した。"
+        },
         {
           "version": "0.1.1",
           "commit": "7794bea682844181430097ecd51107b60f1ff43c",
