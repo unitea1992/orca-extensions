@@ -5,7 +5,7 @@
       "models": [
         {
           "id": "local-test-1",
-          "name": "Fixture",
+          "name": " Fixture Local ",
           "contextWindow": 100000,
           "maxTokens": 8000
         }

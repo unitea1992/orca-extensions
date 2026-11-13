@@ -214,7 +214,7 @@ write('pi/session.jsonl', [
 
 writeFileSync(
   join(here, 'pi/models.json'),
-  `${JSON.stringify({ providers: { testprov: { api: 'fixture', models: [{ id: 'local-test-1', name: 'Fixture', contextWindow: 100_000, maxTokens: 8000 }] } } }, null, 2)}\n`
+  `${JSON.stringify({ providers: { testprov: { api: 'fixture', models: [{ id: 'local-test-1', name: ' Fixture Local ', contextWindow: 100_000, maxTokens: 8000 }] } } }, null, 2)}\n`
 )
 
 // --- OpenCode ----------------------------------------------------------------
@@ -267,7 +267,7 @@ writeFileSync(
       // Sent with every request: what a message with no variant chosen runs with.
       "options": { "body": { "reasoning_effort": "low" } },
       "models": {
-        "oc-test-1": { "limit": { "context": 200000, "output": 8000 } },
+        "oc-test-1": { "name": "OC Fixture", "limit": { "context": 200000, "output": 8000 } },
       },
     },
   },

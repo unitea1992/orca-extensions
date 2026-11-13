@@ -16,10 +16,12 @@ import {
   dshStreamEnd,
   dshTokens,
   eligible,
+  codexNames,
   isInternalCodexModel,
   jsonLines,
   median,
   opencodeEfforts,
+  opencodeNames,
   opencodeMessage,
   opencodeWindows,
   parseClaude,
@@ -28,6 +30,7 @@ import {
   parseDsh,
   parseJsonc,
   parsePi,
+  piNames,
   piSessionDir,
   piWindows,
   readHead,
@@ -419,6 +422,12 @@ async function buildHome() {
   // automatic review, and one that is marked only by its parent and is nearly full.
   place(home, '.config/orca/codex-accounts/acc/home/sessions/2026/01/15/rollout-fixture-sub.jsonl', 'codex/rollout-subagent.jsonl', at + 5000)
   place(home, '.config/orca/codex-accounts/acc/home/sessions/2026/01/15/rollout-fixture-child.jsonl', 'codex/rollout-child.jsonl', at + 6000)
+  // The model catalogs: Codex's cache next to the sessions of its home and of an Orca
+  // account. Fields other than the id and its name are there to be ignored.
+  const catalog = (models) => JSON.stringify({ fetched_at: 'x', client_version: '0', models, secret_field: 'must-not-appear' })
+  mkdirSync(join(home, '.codex'), { recursive: true })
+  writeFileSync(join(home, '.codex/models_cache.json'), catalog([{ slug: 'gpt-test-1', display_name: 'GPT Test One', description: 'must-not-appear' }, { slug: 'unseen-model', display_name: 'Never Used' }]))
+  writeFileSync(join(home, '.config/orca/codex-accounts/acc/home/models_cache.json'), catalog([{ slug: 'gpt-test-2', display_name: 'GPT Test Two' }, { slug: 'gpt-test-1', display_name: 'Shadowed' }]))
   place(home, '.pi/agent/sessions/--work-alpha--/session.jsonl', 'pi/session.jsonl', at)
   place(home, '.pi/agent/models.json', 'pi/models.json', at)
   place(home, '.config/opencode/opencode.json', 'opencode/opencode.json', at)
@@ -455,6 +464,8 @@ const AGENTS = [
   { id: 'x-alpha', type: 'codex', cwd: '/work/alpha', state: 'working', updatedAt: 1 },
   { id: 'p-alpha', type: 'pi', cwd: '/work/alpha', state: 'idle', updatedAt: 1 },
   { id: 'o-alpha', type: 'opencode', cwd: '/work/alpha', state: 'working', updatedAt: 1 },
+  // Orca's `dsh-tui` reaches the reader as `dsh`; the worker maps it, the reader takes either.
+  { id: 'd-gamma', type: 'dsh-tui', cwd: '/work/gamma', state: 'working', updatedAt: 1 },
   { id: 'ignored', type: 'someone-else', cwd: '/work/alpha', state: 'working', updatedAt: 1 }
 ]
 
@@ -503,7 +514,7 @@ test('collect: speeds per model and a context per live agent', async () => {
       { tokPerSec: 100, samples: 2, estimated: false }
     )
 
-    const agents = Object.fromEntries(result.agents.map((row) => [row.id ?? `dsh:${row.cwd}`, row]))
+    const agents = Object.fromEntries(result.agents.map((row) => [row.id, row]))
     // 61,515 of a window that another session of the same model proved to be 1M.
     assert.deepEqual(
       { model: agents['c-alpha'].model, effort: agents['c-alpha'].effort, tokens: agents['c-alpha'].contextTokens, window: agents['c-alpha'].contextWindow, estimated: agents['c-alpha'].windowEstimated, state: agents['c-alpha'].state },
@@ -545,12 +556,13 @@ test('collect: speeds per model and a context per live agent', async () => {
     }
     if (hasZstd) {
       assert.equal(speed['dsh/dsh-test-1/max'].tokPerSec, 100)
-      assert.deepEqual(agents['dsh:/work/gamma'], {
-        id: null,
-        key: 'session-fixture',
+      // The row is the listed agent's, paired with the session log of its directory: its
+      // state is Orca's, not guessed from the log's age.
+      assert.deepEqual(agents['d-gamma'], {
+        id: 'd-gamma',
         agent: 'dsh',
         cwd: '/work/gamma',
-        state: 'idle',
+        state: 'working',
         model: 'dsh-test-1',
         effort: 'max',
         contextTokens: 43_000,
@@ -559,6 +571,15 @@ test('collect: speeds per model and a context per live agent', async () => {
         sessionAt: T0 + 60_000
       })
     }
+    // Display names from each agent's own catalog, for the models seen only: Codex from
+    // the first catalog that names a slug, pi trimmed as the user wrote it, OpenCode's
+    // optional name. Claude and DSH have none, and no other catalog field leaks out.
+    assert.deepEqual(result.names.codex, { 'gpt-test-1': 'GPT Test One', 'gpt-test-2': 'GPT Test Two' })
+    assert.deepEqual(result.names.pi, { 'local-test-1': 'Fixture Local' })
+    if (hasSqlite) assert.deepEqual(result.names.opencode, { 'oc-test-1': 'OC Fixture' })
+    assert.equal('claude' in result.names, false)
+    assert.equal('dsh' in result.names, false)
+    assert.equal(JSON.stringify(result).includes('must-not-appear'), false)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -573,8 +594,8 @@ test('collect: outside the period the speeds go, the context of live agents stay
     assert.equal(agents['c-alpha'].contextTokens, 61_515)
     assert.equal(agents['x-alpha'].contextTokens, 100_800)
     assert.equal(agents['p-alpha'].contextTokens, 31_000)
-    // DSH is listed from its own log, so an idle session leaves the list.
-    assert.equal(result.agents.some((row) => row.agent === 'dsh'), false)
+    // DSH is paired like the rest: the listed agent keeps its session's figures.
+    assert.equal(agents['d-gamma'].contextTokens, 43_000)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -611,6 +632,99 @@ test('collect: an empty home answers with nothing, not an error', async () => {
     assert.equal(result.period, '1h')
     assert.deepEqual(result.models, [])
     assert.deepEqual(result.agents, [])
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// --- model catalogs ------------------------------------------------------------------
+
+test('catalog names: Codex slug, pi id and OpenCode id to the name the catalog gives', () => {
+  assert.deepEqual(
+    [...codexNames({ models: [{ slug: 'a-1', display_name: ' Alpha One ' }, { slug: 'a-1', display_name: 'Again' }, { slug: 'b-2' }, { slug: 'c-3', display_name: '  ' }, { display_name: 'No slug' }, 7, null] })],
+    [['a-1', 'Alpha One']]
+  )
+  assert.deepEqual(
+    [...piNames({ providers: { one: { models: [{ id: 'm-1', name: 'M One' }, { id: 'm-2' }] }, two: { models: [{ id: 'm-1', name: 'Other' }, { id: 'm-3', name: ' M Three ' }] }, bad: 3 } })],
+    [['m-1', 'M One'], ['m-3', 'M Three']]
+  )
+  assert.deepEqual(
+    [...opencodeNames({ provider: { p: { models: { x: { name: 'X Named' }, y: { limit: { context: 5 } }, z: 'text' } } } })],
+    [['x', 'X Named']]
+  )
+  // A control character is not part of a name; a long one is cut.
+  assert.deepEqual([...codexNames({ models: [{ slug: 'a', display_name: 'Line\nBreak' }] })], [['a', 'Line Break']])
+  assert.equal([...codexNames({ models: [{ slug: 'a', display_name: 'x'.repeat(500) }] })][0][1].length, 100)
+  for (const parse of [codexNames, piNames, opencodeNames]) {
+    assert.deepEqual([...parse(null)], [])
+    assert.deepEqual([...parse({})], [])
+  }
+})
+
+test('collect: pi\'s catalog is looked up in PI_CODING_AGENT_DIR; only models seen are named', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-meter-home-'))
+  try {
+    const agentDir = join(home, 'elsewhere')
+    mkdirSync(join(agentDir, 'sessions/--work-alpha--'), { recursive: true })
+    writeFileSync(join(agentDir, 'sessions/--work-alpha--/session.jsonl'), fixture('pi/session.jsonl'))
+    utimesSync(join(agentDir, 'sessions/--work-alpha--/session.jsonl'), (T0 + 60_000) / 1000, (T0 + 60_000) / 1000)
+    writeFileSync(
+      join(agentDir, 'models.json'),
+      JSON.stringify({ providers: { p: { apiKey: 'must-not-appear', models: [{ id: 'local-test-1', name: 'Local One' }, { id: 'unseen', name: 'Unseen' }] } } })
+    )
+    const result = await collect({ period: '15m', agents: [] }, { home, env: { PI_CODING_AGENT_DIR: agentDir }, now: T0 + 12 * 60_000 })
+    assert.deepEqual(result.names, { pi: { 'local-test-1': 'Local One' } })
+    assert.equal(JSON.stringify(result).includes('must-not-appear'), false)
+    // With no catalog the names are simply absent.
+    const bare = await collect({ period: '15m', agents: [] }, { home, env: { PI_CODING_AGENT_DIR: join(home, 'none') }, now: T0 + 12 * 60_000 })
+    assert.deepEqual(bare.names, {})
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+// --- DSH is a live agent like the others --------------------------------------------
+
+function placeDsh(home, cwdDir, session, cwd, at) {
+  const target = join(home, '.dsh/sessions', cwdDir, session, 'session.v4.jsonl.zstd')
+  mkdirSync(dirname(target), { recursive: true })
+  const text = fixture('dsh/session.jsonl').replace('"cwd":"/work/gamma"', `"cwd":"${cwd}"`)
+  writeFileSync(target, zlib.zstdCompressSync(Buffer.from(text)))
+  utimesSync(target, at / 1000, at / 1000)
+}
+
+test('dsh: a listed agent gets the newest session of its directory, an unlisted session no row', { skip: !hasZstd }, async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-meter-home-'))
+  try {
+    placeDsh(home, '-work-gamma', 'new-session', '/work/gamma', T0 + 60_000)
+    placeDsh(home, '-work-gamma', 'old-session', '/work/gamma', T0 + 30_000)
+    placeDsh(home, '-work-other', 'other-session', '/work/other', T0 + 50_000)
+    const now = T0 + 2 * 60_000
+    const listed = [
+      { id: 'tab-1:leaf-1', type: 'dsh-tui', cwd: '/work/gamma', state: 'working', updatedAt: 9 },
+      { id: 'tab-2:leaf-1', type: 'dsh', cwd: '/work/gamma', state: 'done', updatedAt: 1 },
+      { id: 'tab-3:leaf-1', type: 'dsh-tui', cwd: '/work/nowhere', state: 'idle', updatedAt: 1 }
+    ]
+    const result = await collect({ period: '15m', agents: listed }, { home, env: {}, now })
+    const rows = Object.fromEntries(result.agents.map((row) => [row.id, row]))
+    // Rows are Orca's agents, none made from a log: /work/other is not listed.
+    assert.deepEqual(Object.keys(rows).sort(), ['tab-1:leaf-1', 'tab-2:leaf-1', 'tab-3:leaf-1'])
+    assert.equal(rows['tab-1:leaf-1'].sessionAt, T0 + 60_000)
+    assert.equal(rows['tab-2:leaf-1'].sessionAt, T0 + 30_000)
+    assert.equal(rows['tab-1:leaf-1'].state, 'working')
+    assert.deepEqual([rows['tab-3:leaf-1'].model, rows['tab-3:leaf-1'].contextTokens], [null, null])
+    assert.equal(result.agents.every((row) => row.agent === 'dsh'), true)
+
+    // With none listed there is no row at all, but every session in the period still
+    // counts for the model's speed.
+    const none = await collect({ period: '15m', agents: [] }, { home, env: {}, now })
+    assert.deepEqual(none.agents, [])
+    assert.equal(none.models.find((entry) => entry.agent === 'dsh').samples, 6)
+
+    // A listed agent finds its session beyond the period; one that is not listed does not.
+    const later = await collect({ period: '15m', agents: listed }, { home, env: {}, now: T0 + 3 * 60 * 60_000 })
+    assert.deepEqual(later.models, [])
+    assert.equal(later.agents.find((row) => row.id === 'tab-1:leaf-1').contextTokens, 43_000)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

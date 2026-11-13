@@ -6,8 +6,9 @@
 // run looks at the session logs the agents already write, and bounds its own work
 // (files touched in the period, the tail of large logs, a deadline).
 //
-// Nothing here prints message text. The result holds model names, token counts,
-// durations and, for sessions Orca does not list, the working directory.
+// Nothing here prints message text. The result holds model names, token counts and
+// durations. Model display names come from the agents' own model catalogs: the id → name
+// pairs of the models seen, never any other field of those files.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -34,8 +35,6 @@ const DEFAULT_BUDGET_MS = 4500
 /** How far back a live agent's session is looked up for its context. */
 const CONTEXT_LOOKBACK_MS = 7 * 24 * 60 * 60_000
 const MAX_FILES_PER_SOURCE = 400
-/** A DSH session written this recently is drawn as working. */
-const DSH_WORKING_MS = 2 * 60_000
 
 const CLAUDE_WINDOW = 200_000
 const CLAUDE_WINDOW_1M = 1_000_000
@@ -1139,6 +1138,10 @@ export function parseDsh(text) {
 
 function collectDsh(run) {
   const root = path.join(run.home, '.dsh', 'sessions')
+  const wanted = run.agentsByType.get('dsh') ?? new Map()
+  // Orca lists DSH like the other agents, so a live agent's session is looked up further
+  // back than the period; with none listed only the period's sessions count, for speed.
+  const lookback = wanted.size > 0 ? run.now - CONTEXT_LOOKBACK_MS : run.since
   const files = []
   for (const cwdDir of listDir(root)) {
     if (!isDirEntry(root, cwdDir)) continue
@@ -1148,8 +1151,8 @@ function collectDsh(run) {
     for (const session of listDir(dir)) {
       const file = path.join(dir, session.name, 'session.v4.jsonl.zstd')
       const stat = statOrNull(file)
-      if (stat && stat.isFile() && stat.mtimeMs >= run.since) {
-        files.push({ file, mtime: stat.mtimeMs, size: stat.size, key: session.name })
+      if (stat && stat.isFile() && stat.mtimeMs >= lookback) {
+        files.push({ file, mtime: stat.mtimeMs, size: stat.size })
       }
     }
   }
@@ -1159,7 +1162,13 @@ function collectDsh(run) {
     return { ...stats, error: 'zstd を展開できません（Node.js 22.15 以降が必要）' }
   }
   files.sort((left, right) => right.mtime - left.mtime)
+  // A session's directory is in its own log's header, so the log is read to pair it.
+  const sessions = new Map()
+  const parsed = new Map()
+  const satisfied = () => [...wanted].every(([cwd, agents]) => (sessions.get(cwd)?.length ?? 0) >= agents.length)
   for (const item of files.slice(0, MAX_FILES_PER_SOURCE)) {
+    // Past the period only live agents' sessions are wanted: stop once each has one.
+    if (item.mtime < run.since && satisfied()) break
     if (!run.hasTime()) break
     if (item.size > DSH_MAX_BYTES) continue
     let result
@@ -1169,24 +1178,27 @@ function collectDsh(run) {
     } catch {
       continue
     }
-    run.samples.push(...result.samples)
-    // Orca does not list DSH, so its own log says which sessions are alive.
+    if (item.mtime >= run.since) run.samples.push(...result.samples)
+    // Only what Orca lists is a row; a session of a subagent is never an agent's own.
     if (result.header.subagent || result.header.cwd === null) continue
-    run.rows.push({
-      id: null,
-      // Stays the same for the session's life, so two in one directory keep their order.
-      key: item.key,
-      agent: 'dsh',
-      cwd: result.header.cwd,
-      state: run.now - item.mtime <= DSH_WORKING_MS ? 'working' : 'idle',
-      ...contextFields(result.context),
-      // A session that has not answered yet still names its model and window.
-      model: result.context?.model ?? result.model,
-      effort: result.context?.effort ?? result.effort,
-      contextWindow: result.context?.window ?? result.window,
-      sessionAt: item.mtime
-    })
+    parsed.set(item.file, result)
+    const list = sessions.get(result.header.cwd) ?? []
+    list.push(item)
+    sessions.set(result.header.cwd, list)
   }
+  assign(run, 'dsh', sessions, (item) => {
+    const result = parsed.get(item.file)
+    const context = result.context
+    // A session that has not answered yet still names its model and window.
+    return {
+      tokens: context?.tokens ?? null,
+      model: context?.model ?? result.model,
+      effort: context?.effort ?? result.effort,
+      window: context?.window ?? result.window,
+      windowEstimated: false,
+      sessionAt: item.mtime
+    }
+  })
   return stats
 }
 
@@ -1235,13 +1247,14 @@ function assign(run, type, sessionsByCwd, readContext) {
   }
 }
 
-const AGENT_TYPES = ['claude', 'codex', 'pi', 'opencode']
+const AGENT_TYPES = ['claude', 'codex', 'pi', 'opencode', 'dsh']
 
 function groupAgents(agents) {
   const byType = new Map()
   for (const agent of Array.isArray(agents) ? agents : []) {
-    if (!isRecord(agent) || !AGENT_TYPES.includes(agent.type) || typeof agent.cwd !== 'string') continue
-    const byCwd = byType.get(agent.type) ?? new Map()
+    const type = agent?.type === 'dsh-tui' ? 'dsh' : agent?.type
+    if (!isRecord(agent) || !AGENT_TYPES.includes(type) || typeof agent.cwd !== 'string') continue
+    const byCwd = byType.get(type) ?? new Map()
     const list = byCwd.get(agent.cwd) ?? []
     list.push({
       id: agent.id ?? null,
@@ -1249,9 +1262,112 @@ function groupAgents(agents) {
       updatedAt: num(agent.updatedAt)
     })
     byCwd.set(agent.cwd, list)
-    byType.set(agent.type, byCwd)
+    byType.set(type, byCwd)
   }
   return byType
+}
+
+// ---------------------------------------------------------------------------
+// Display names from the agents' own model catalogs
+//
+// Codex, pi and OpenCode keep a list of the models they offer, each with the name its
+// maker or its user gave it. Only the id → name pairs are taken from those files. Claude
+// has no such catalog here, and DSH's provider config can hold secrets, so it is not read.
+
+const CATALOG_MAX_BYTES = 8 * 1024 * 1024
+const NAME_MAX = 100
+
+/** A name as the catalog wrote it, trimmed; null when there is nothing to show. */
+function catalogName(value) {
+  if (typeof value !== 'string') return null
+  const name = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+  return name === '' ? null : name.slice(0, NAME_MAX)
+}
+
+function addName(names, id, value) {
+  const name = catalogName(value)
+  if (typeof id === 'string' && id !== '' && name !== null && !names.has(id)) names.set(id, name)
+}
+
+/** Codex's `models_cache.json` → model slug → `display_name`. */
+export function codexNames(catalog) {
+  const names = new Map()
+  const models = isRecord(catalog) && Array.isArray(catalog.models) ? catalog.models : []
+  for (const model of models) if (isRecord(model)) addName(names, model.slug, model.display_name)
+  return names
+}
+
+/** pi's `models.json` → model id → `name`. */
+export function piNames(config) {
+  const names = new Map()
+  const providers = isRecord(config) && isRecord(config.providers) ? config.providers : {}
+  for (const entry of Object.values(providers)) {
+    const models = isRecord(entry) && Array.isArray(entry.models) ? entry.models : []
+    for (const model of models) if (isRecord(model)) addName(names, model.id, model.name)
+  }
+  return names
+}
+
+/** `opencode.json` → model id → `name`, where the config gives one. */
+export function opencodeNames(config) {
+  const names = new Map()
+  const providers = isRecord(config) && isRecord(config.provider) ? config.provider : {}
+  for (const entry of Object.values(providers)) {
+    const models = isRecord(entry) && isRecord(entry.models) ? entry.models : {}
+    for (const [id, model] of Object.entries(models)) if (isRecord(model)) addName(names, id, model.name)
+  }
+  return names
+}
+
+function readCatalog(file) {
+  const stat = statOrNull(file)
+  if (!stat || !stat.isFile() || stat.size > CATALOG_MAX_BYTES) return null
+  return readJsonFile(file)
+}
+
+function mergeNames(into, from) {
+  for (const [id, name] of from) if (!into.has(id)) into.set(id, name)
+}
+
+/**
+ * agent kind → model id → display name, for the models this run saw only. A kind with no
+ * catalog, or a model its catalog does not name, is left out: the worker spells those
+ * from the id.
+ */
+function collectNames(run, models, rows) {
+  const seen = new Map()
+  for (const entry of [...models, ...rows]) {
+    if (typeof entry.model !== 'string' || entry.model === '') continue
+    const ids = seen.get(entry.agent) ?? new Set()
+    ids.add(entry.model)
+    seen.set(entry.agent, ids)
+  }
+  const catalogs = {
+    codex: () => {
+      const names = new Map()
+      for (const root of codexRoots(run.env, run.home)) {
+        mergeNames(names, codexNames(readCatalog(path.join(path.dirname(root), 'models_cache.json'))))
+      }
+      return names
+    },
+    pi: () => piNames(readCatalog(path.join(run.env.PI_CODING_AGENT_DIR || path.join(run.home, '.pi', 'agent'), 'models.json'))),
+    opencode: () => opencodeNames(opencodeConfig(run.env, run.home))
+  }
+  const result = {}
+  for (const [agent, load] of Object.entries(catalogs)) {
+    const ids = seen.get(agent)
+    if (!ids) continue
+    let names
+    try {
+      names = load()
+    } catch {
+      continue
+    }
+    const picked = {}
+    for (const id of ids) if (names.has(id)) picked[id] = names.get(id)
+    if (Object.keys(picked).length > 0) result[agent] = picked
+  }
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,6 +1427,7 @@ export async function collect(input = {}, options = {}) {
     }
   }
 
+  const models = aggregate(run.samples, run.since, now)
   return {
     v: 1,
     ok: true,
@@ -1319,7 +1436,8 @@ export async function collect(input = {}, options = {}) {
     period,
     tookMs: Date.now() - started,
     truncated: run.truncated,
-    models: aggregate(run.samples, run.since, now),
+    models,
+    names: collectNames(run, models, run.rows),
     agents: run.rows,
     sources
   }
