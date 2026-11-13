@@ -45,6 +45,10 @@ const logs = []
 const unexpected = []
 /** Set to make the stand-in host refuse like Orca does when approval is stale. */
 let refuse = false
+/** What the stand-in desktop answers to `workspace.list`, and the host calls it got. */
+let workspaces = []
+const hostCalls = []
+const granted = ['settings:own', 'workspace:read', 'workspace:write']
 let scratch = null
 let counter = ''
 
@@ -73,7 +77,7 @@ before(() => {
   }
   activate({
     api: { major: 1, minor: 6 },
-    grantedCapabilities: ['settings:own'],
+    grantedCapabilities: granted,
     log: (line) => logs.push(line),
     settings: {
       get: async (key) => {
@@ -83,7 +87,16 @@ before(() => {
       onDidChange: () => unexpected.push('settings.onDidChange')
     },
     panels: { handle: (name, handler) => handlers.set(name, handler), post: (name) => unexpected.push(`panels.post ${name}`) },
-    host: { has: () => true, call: async (method) => unexpected.push(`host.call ${method}`) }
+    host: {
+      has: () => true,
+      call: async (method, params) => {
+        if (refuse) throw Object.assign(new Error('plugin is not enabled with current consent'), { code: 'consent_required' })
+        hostCalls.push([method, params])
+        if (method === 'workspace.list') return { workspaces, truncated: false }
+        if (method === 'workspace.open') return { opened: true }
+        throw Object.assign(new Error(`no such method ${method}`), { code: 'unknown_method' })
+      }
+    }
   })
 })
 
@@ -121,6 +134,7 @@ test('the server is read when a panel asks, and at no other time', { skip, timeo
   await sleep(settings.refreshSeconds * 1000 + 1000)
   assert.equal(sshRuns(), afterForce)
   assert.deepEqual(unexpected, [])
+  assert.deepEqual(hostCalls, [])
 
   // It opens again: the answer is older than half an interval, so this ask reads.
   const reopened = await ask()
@@ -208,4 +222,47 @@ test('stale approval: logged once, shown in the panel, and cleared when it comes
   assert.equal((await ask(true)).consentRequired, false)
   await ask(true)
   assert.equal(logs.filter((line) => line.startsWith('consent: ')).length, 1)
+})
+
+test('pressing a row opens its workspace on this desktop', { skip, timeout: 60_000 }, async () => {
+  const open = (row) => handlers.get('row.open')(row)
+  workspaces = [
+    { id: 'ws-local', kind: 'worktree', name: 'alpha', path: '/work/alpha', branch: 'main', hostId: null },
+    { id: 'ws-remote', kind: 'worktree', name: 'alpha', path: '/work/alpha', branch: 'main', hostId: 'env-1' },
+    { id: 'repo-2::/work/beta', kind: 'worktree', name: 'beta', path: '/work/beta', branch: null, hostId: 'env-1' }
+  ]
+  // A chat-view agent has no terminal; its workspace is what opens. The same path exists
+  // here and on the server: the server's is the one.
+  hostCalls.length = 0
+  assert.deepEqual(await open({ id: 'structured-agent-session-1:pane-1', worktreeId: 'repo-1::/work/alpha', path: '/work/alpha' }), { ok: true })
+  assert.deepEqual(hostCalls, [
+    ['workspace.list', {}],
+    ['workspace.open', { workspaceId: 'ws-remote' }]
+  ])
+  // The server's worktree id, when this desktop knows it, settles it without the path.
+  hostCalls.length = 0
+  await open({ id: 'x', worktreeId: 'repo-2::/work/beta', path: '/somewhere/else' })
+  assert.deepEqual(hostCalls.at(-1), ['workspace.open', { workspaceId: 'repo-2::/work/beta' }])
+  // A session Orca does not list has only its directory.
+  hostCalls.length = 0
+  await open({ id: null, worktreeId: '', path: '/work/beta' })
+  assert.deepEqual(hostCalls.at(-1), ['workspace.open', { workspaceId: 'repo-2::/work/beta' }])
+
+  // Nothing to open: said, not swallowed.
+  await assert.rejects(open({ id: 'x', worktreeId: '', path: '/work/none' }), /none のワークスペースが見つかりません/)
+  refuse = true
+  try {
+    await assert.rejects(open({ id: 'x', worktreeId: '', path: '/work/beta' }), /承認をやり直してください/)
+  } finally {
+    refuse = false
+  }
+  // Loaded under an approval that predates the workspace access: no call is attempted.
+  granted.length = 1
+  try {
+    hostCalls.length = 0
+    await assert.rejects(open({ id: 'x', worktreeId: '', path: '/work/beta' }), /権限がありません/)
+    assert.deepEqual(hostCalls, [])
+  } finally {
+    granted.push('workspace:read', 'workspace:write')
+  }
 })

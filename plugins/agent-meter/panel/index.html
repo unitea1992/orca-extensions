@@ -251,16 +251,18 @@
       }
 
       function renderRow(row) {
-        const element = node(row.focusable ? 'button' : 'div', 'row')
-        if (row.focusable) {
-          element.type = 'button'
-          element.addEventListener('click', () => {
-            void orca.plugin.request('agent.focus', { id: row.id }).catch((error) => {
+        // Every row can be pressed: it shows that agent's workspace in Orca.
+        const element = node('button', 'row')
+        element.type = 'button'
+        element.addEventListener('click', () => {
+          el.notice.hidden = true
+          void orca.plugin
+            .request('row.open', { id: row.id, worktreeId: row.worktreeId, path: row.path })
+            .catch((error) => {
               el.notice.textContent = String(error?.message ?? error)
               el.notice.hidden = false
             })
-          })
-        }
+        })
         const name = node('span', 'name')
         const first = node('span')
         first.append(node('span', row.working ? 'dot working' : 'dot'), row.name)

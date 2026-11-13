@@ -608,6 +608,7 @@ export function flattenAgents(listed) {
         type: agent.agentType,
         state: String(agent.state ?? ''),
         cwd: worktree.path,
+        worktreeId: typeof worktree.worktreeId === 'string' ? worktree.worktreeId : '',
         name: String(worktree.displayName || baseName(worktree.path)),
         title: cleanTitle(agent.displayName || agent.taskTitle),
         updatedAt: Number(agent.updatedAt) || 0
@@ -680,8 +681,37 @@ function order(agent) {
   return index === -1 ? AGENT_ORDER.length : index
 }
 
+function samePath(left, right) {
+  const trim = (value) => String(value ?? '').replace(/[\\/]+$/, '')
+  return trim(left) !== '' && trim(left) === trim(right)
+}
+
+/**
+ * The workspace of this desktop's Orca that a row stands for, from `workspace.list`.
+ *
+ * The row comes from the server (`orca worktree ps`, or a session log), the list from
+ * this desktop, and nothing says outright which entry is which. The server's own id for
+ * the worktree settles it when the desktop uses the same one. Otherwise the path does,
+ * and when the same path exists on several hosts, the one on the paired server the
+ * plugin reads (`hosts`: its environment id and name), else any remote one, is taken
+ * before a local one.
+ */
+export function pickWorkspace(workspaces, { worktreeId = '', path = '' }, hosts = []) {
+  const list = Array.isArray(workspaces) ? workspaces.filter((entry) => typeof entry?.id === 'string') : []
+  const byId = worktreeId === '' ? undefined : list.find((entry) => entry.id === worktreeId)
+  if (byId) return byId
+  const byPath = list.filter((entry) => samePath(entry.path, path))
+  if (byPath.length < 2) return byPath[0] ?? null
+  const wanted = hosts.filter(Boolean)
+  return (
+    byPath.find((entry) => entry.hostId !== null && wanted.includes(entry.hostId)) ??
+    byPath.find((entry) => entry.hostId !== null && entry.hostId !== undefined) ??
+    byPath[0]
+  )
+}
+
 /** Reader result + Orca's agent list → groups per model with their live agents. */
-export function buildGroups(reader, agents = [], handles = new Map()) {
+export function buildGroups(reader, agents = []) {
   const live = new Map(agents.map((agent) => [agent.id, agent]))
   const groups = new Map()
   const groupOf = (agent, model) => {
@@ -717,7 +747,9 @@ export function buildGroups(reader, agents = [], handles = new Map()) {
       window,
       percent: tokens !== null && window !== null ? (tokens / window) * 100 : null,
       windowEstimated: Boolean(row.windowEstimated),
-      focusable: row.id !== null && handles.has(row.id)
+      // What a click needs to find the workspace on this desktop.
+      path: known?.cwd ?? row.cwd ?? '',
+      worktreeId: known?.worktreeId ?? ''
     })
   }
   const list = [...groups.values()]
@@ -864,14 +896,12 @@ async function build(orca, settings) {
     // Checked before anything is spawned, so a bad value reads as a settings problem.
     buildSshArgs(settings)
     let agents = []
-    let handles = new Map()
     try {
       // A name the CLI can take as it is needs no lookup.
       const direct = settings.environment !== '' && SAFE_ARG.test(settings.environment)
       environment = pickEnvironment(settings.environment, direct ? [] : await listEnvironments())
       const listed = await runCli(['worktree', 'ps', '--json', '--environment', environment.arg, '--limit', '200'])
-      const known = await readTerminals(environment.arg).catch(() => ({ handles: new Map(), titles: new Map() }))
-      handles = known.handles
+      const known = await readTerminals(environment.arg).catch(() => ({ titles: new Map() }))
       agents = labelAgents(flattenAgents(listed), known.titles)
     } catch (error) {
       // The speeds do not depend on Orca's list, so keep going without it.
@@ -886,7 +916,7 @@ async function build(orca, settings) {
       .map(([name, source]) => `${AGENT_LABELS[name] ?? name}: ${source.error}`)
     if (sourceErrors.length > 0 && !base.notice) base.notice = sourceErrors.join(' / ')
     lastRunKey = ''
-    const groups = buildGroups(reader, agents, handles)
+    const groups = buildGroups(reader, agents)
     logOnce(
       orca,
       `state models=${(reader.models ?? []).length} agents=${(reader.agents ?? []).length} node=${reader.node} truncated=${reader.truncated === true}`
@@ -935,10 +965,48 @@ export function snapshotFor(orca, force = false) {
   return read(orca)
 }
 
-async function focusAgent(id) {
-  const handle = terminals.handles.get(String(id))
-  if (!handle) throw fail('not_found', 'このエージェントの端末が見つかりません')
-  await runCli(['terminal', 'focus', '--terminal', handle, '--environment', environment.arg, '--json'])
+/**
+ * A row was pressed: show that agent's workspace in this desktop's Orca.
+ *
+ * Most agents run in Orca's chat view, which has no terminal and no CLI command to
+ * switch to, so the workspace is what can be opened for every row: `workspace.list`
+ * finds it by the server's worktree id or its path, `workspace.open` shows it, as a
+ * press in Orca's own sidebar does. An agent that does run in a terminal has that
+ * terminal brought forward as well.
+ */
+async function openRow(orca, input) {
+  const row = { id: input?.id ?? null, worktreeId: String(input?.worktreeId ?? ''), path: String(input?.path ?? '') }
+  let opened = false
+  let reason = ''
+  const granted = (kind) => orca.grantedCapabilities.includes(kind)
+  if (!granted('workspace:read') || !granted('workspace:write')) {
+    reason = 'ワークスペースを開く権限がありません。プラグインの承認をやり直してください'
+  } else {
+    try {
+      const listed = await orca.host.call('workspace.list', {})
+      const workspace = pickWorkspace(listed?.workspaces, row, [environment.arg, environment.label])
+      if (workspace) {
+        await orca.host.call('workspace.open', { workspaceId: workspace.id })
+        opened = true
+      } else {
+        reason = `この Orca に ${baseName(row.path) || 'その'} のワークスペースが見つかりません`
+      }
+    } catch (error) {
+      reason = isConsentError(error)
+        ? 'Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください'
+        : `ワークスペースを開けません: ${error?.message ?? error}`
+    }
+  }
+  const handle = row.id === null ? undefined : terminals.handles.get(String(row.id))
+  if (handle) {
+    try {
+      await runCli(['terminal', 'focus', '--terminal', handle, '--environment', environment.arg, '--json'])
+      opened = true
+    } catch (error) {
+      if (!opened) reason = reason || `端末に移動できません: ${error.message}`
+    }
+  }
+  if (!opened) throw fail('action_failed', reason)
   return { ok: true }
 }
 
@@ -958,7 +1026,7 @@ export default function activate(orca) {
   // Nothing is scheduled here. A panel asks while it is visible, and each ask is
   // answered with a read; with no panel open the worker does nothing at all.
   orca.panels.handle('snapshot.get', async (input) => snapshotFor(orca, input?.force === true))
-  orca.panels.handle('agent.focus', (input) => focusAgent(input?.id))
+  orca.panels.handle('row.open', (input) => openRow(orca, input))
   // Also reachable without the panel: `orca plugin dev request <folder> connection.test`.
   orca.panels.handle('connection.test', async () => testConnection(orca, await readSettings(orca)))
 }

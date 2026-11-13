@@ -303,6 +303,7 @@ writeFileSync(
       worktrees: [
         {
           path: '/work/alpha',
+          worktreeId: 'repo-1::/work/alpha',
           displayName: 'alpha',
           agents: [
             { paneKey: 'tab-1:leaf-1', agentType: 'claude', state: 'working', updatedAt: T0 + 5000, children: [] },

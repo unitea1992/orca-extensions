@@ -2,6 +2,7 @@
   "worktrees": [
     {
       "path": "/work/alpha",
+      "worktreeId": "repo-1::/work/alpha",
       "displayName": "alpha",
       "agents": [
         {

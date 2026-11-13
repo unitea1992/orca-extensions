@@ -22,6 +22,7 @@ import {
   labelAgents,
   parseReaderOutput,
   pickEnvironment,
+  pickWorkspace,
   readerError,
   readerPayload,
   resolveSsh,
@@ -469,7 +470,6 @@ const READER = {
 function snapshotOf(reader, overrides = {}) {
   const titles = terminalTitles(fixture('terminal-list.json'))
   const agents = labelAgents(flattenAgents(fixture('worktree-ps.json')), titles)
-  const handles = terminalHandles(fixture('terminal-list.json'))
   return {
     configured: true,
     label: 'user@host',
@@ -479,7 +479,7 @@ function snapshotOf(reader, overrides = {}) {
     error: null,
     notice: null,
     consentRequired: false,
-    groups: buildGroups(reader, agents, handles),
+    groups: buildGroups(reader, agents),
     ...overrides
   }
 }
@@ -499,16 +499,38 @@ test('groups: per model, kinds in a fixed order, agents under their model', () =
   )
   const [alpha, beta] = groups[0].rows
   assert.deepEqual(
-    { working: alpha.working, percent: alpha.percent, focusable: alpha.focusable, estimated: alpha.windowEstimated },
-    { working: true, percent: 73, focusable: true, estimated: true }
+    { working: alpha.working, percent: alpha.percent, estimated: alpha.windowEstimated },
+    { working: true, percent: 73, estimated: true }
   )
-  // Not in the terminal list, so there is nothing to focus.
-  assert.deepEqual({ working: beta.working, percent: beta.percent, focusable: beta.focusable }, { working: false, percent: 18, focusable: false })
-  assert.equal(groups[2].rows[0].focusable, false)
-  assert.equal(groups[2].rows[1].focusable, true)
+  assert.deepEqual({ working: beta.working, percent: beta.percent }, { working: false, percent: 18 })
+  // Every row says where its workspace is, so every row can be opened: a listed agent by
+  // Orca's worktree id and path, a session Orca does not list by its directory.
+  assert.deepEqual({ path: alpha.path, worktreeId: alpha.worktreeId }, { path: '/work/alpha', worktreeId: 'repo-1::/work/alpha' })
+  assert.deepEqual({ path: beta.path, worktreeId: beta.worktreeId }, { path: '/work/beta', worktreeId: '' })
+  assert.deepEqual({ path: groups[4].rows[0].path, worktreeId: groups[4].rows[0].worktreeId }, { path: '/work/gamma', worktreeId: '' })
   // No window known: tokens only.
   assert.deepEqual({ tokens: groups[4].rows[0].tokens, percent: groups[4].rows[0].percent }, { tokens: 9000, percent: null })
   assert.equal(groups.flatMap((group) => group.rows).some((row) => 'unlisted' in row), false)
+})
+
+test('workspace: the row is found by the server id, else by path, the paired server first', () => {
+  const local = { id: 'ws-local', kind: 'worktree', name: 'alpha', path: '/work/alpha', branch: 'main', hostId: null }
+  const remote = { id: 'ws-remote', kind: 'worktree', name: 'alpha', path: '/work/alpha', branch: 'main', hostId: 'env-1' }
+  const other = { id: 'ws-other', kind: 'worktree', name: 'alpha', path: '/work/alpha', branch: 'main', hostId: 'env-2' }
+  const same = { id: 'repo-1::/work/alpha', kind: 'worktree', name: 'alpha', path: '/elsewhere', branch: null, hostId: 'env-9' }
+  // The desktop uses the server's own id: that is the one, whatever its path.
+  assert.equal(pickWorkspace([local, remote, same], { worktreeId: 'repo-1::/work/alpha', path: '/work/alpha' }).id, 'repo-1::/work/alpha')
+  // Only one workspace has the path.
+  assert.equal(pickWorkspace([local], { path: '/work/alpha' }).id, 'ws-local')
+  assert.equal(pickWorkspace([local], { worktreeId: 'unknown', path: '/work/alpha/' }).id, 'ws-local')
+  // The same path here and on servers: the server the plugin reads, else a remote one.
+  assert.equal(pickWorkspace([local, other, remote], { path: '/work/alpha' }, ['env-1', 'my server']).id, 'ws-remote')
+  assert.equal(pickWorkspace([local, other, remote], { path: '/work/alpha' }, ['local']).id, 'ws-other')
+  assert.equal(pickWorkspace([local, other], { path: '/work/alpha' }).id, 'ws-other')
+  // Nothing to open.
+  assert.equal(pickWorkspace([local, remote], { path: '/work/none' }), null)
+  assert.equal(pickWorkspace([local], { path: '' }), null)
+  assert.equal(pickWorkspace(undefined, { path: '/work/alpha' }), null)
 })
 
 test('groups: sessions Orca does not list are numbered by their own key', () => {
@@ -545,5 +567,6 @@ test('manifest: settings match the worker defaults and hold no real host', () =>
   // The panel is all there is: nothing in the status bar, so nothing that keeps the
   // worker running while no panel is open.
   assert.deepEqual(Object.keys(manifest.contributes).sort(), ['panels', 'settings'])
-  assert.deepEqual(manifest.capabilities, [{ kind: 'settings:own' }])
+  // Settings, and finding and showing a workspace when a row is pressed.
+  assert.deepEqual(manifest.capabilities, [{ kind: 'settings:own' }, { kind: 'workspace:read' }, { kind: 'workspace:write' }])
 })
