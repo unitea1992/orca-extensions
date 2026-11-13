@@ -108,6 +108,27 @@
       ],
       "releases": [
         {
+          "version": "0.1.2",
+          "commit": "ef7c307cd104b5b139c979b9395bc194334f9db8",
+          "contentHash": "d29cf7aec10244a4540d36ab9c487759e4c1f3e5ca6d7a651e11331e734df8b9",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Agent Meter",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "パフォーマンス"
+            }
+          ],
+          "capabilities": [
+            "settings:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-13",
+          "changelog": "dsh-tui のセッションを拾うようにした。DSH のコンテキストにキャッシュ分を足し、/model での途中の切り替えに追従する。"
+        },
+        {
           "version": "0.1.1",
           "commit": "155a99bdc72f93ba1035d7c3d1fbd5dc54db7020",
           "contentHash": "1c95111c6a7155411938cc62419efa4d0ae071c3d735bd22c6d3c956e5c3b3fc",
