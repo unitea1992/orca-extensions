@@ -70,11 +70,24 @@
       ]
     },
     {
+      "path": "/work/gamma",
+      "repo": "gamma-repo",
+      "displayName": "gamma",
+      "agents": [
+        {
+          "paneKey": "tab-7:leaf-7",
+          "agentType": "dsh-tui",
+          "state": "working",
+          "updatedAt": 1768471200000
+        }
+      ]
+    },
+    {
       "path": "/work/empty",
       "displayName": "empty",
       "agents": []
     }
   ],
-  "totalCount": 4,
+  "totalCount": 5,
   "truncated": false
 }

@@ -3,7 +3,7 @@
   "execution": "trusted-worker",
   "id": "agent-meter",
   "name": "Agent Meter",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "リモートの Orca サーバーで動くコーディングエージェントの、モデル別の出力速度（tok/s）とエージェント別のコンテキスト使用率を、右サイドバーのパネルに出す。",
   "license": "MIT",
   "engines": {

@@ -21,6 +21,7 @@ import {
   isConsentError,
   labelAgents,
   modelLabel,
+  modelName,
   parseReaderOutput,
   pickEnvironment,
   readerError,
@@ -409,10 +410,13 @@ test('worktree ps: known agent kinds, with their repository and workspace', () =
       { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: '' },
       // Whitespace in a title is flattened to one line.
       { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: 'Fix login flow' },
-      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: '' }
+      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', repo: 'delta', name: 'develop', title: '' },
+      // Orca's `dsh-tui` is the reader's `dsh`.
+      { id: 'tab-7:leaf-7', type: 'dsh', state: 'working', cwd: '/work/gamma', repo: 'gamma-repo', name: 'gamma', title: '' }
     ]
   )
   assert.deepEqual(flattenAgents({}), [])
+  assert.equal(flattenAgents({ worktrees: [{ path: '/work/g', agents: [{ paneKey: 'p', agentType: 'dsh' }] }] })[0].type, 'dsh')
   // The repository is not said twice when the workspace has its name.
   const same = flattenAgents({ worktrees: [{ path: '/work/solo', repo: 'solo', displayName: 'solo', agents: [{ paneKey: 'p', agentType: 'pi' }] }] })
   assert.deepEqual([same[0].repo, same[0].name], ['', 'solo'])
@@ -434,7 +438,8 @@ test('labels: agents sharing a workspace get a title or a number, others none', 
       // Numbered by pane key, not by listing order, so a number stays with its agent.
       ['tab-5:leaf-b', '#2'],
       ['tab-5:leaf-a', 'Fix login flow'],
-      ['tab-6:leaf-a', 'codex: review']
+      ['tab-6:leaf-a', 'codex: review'],
+      ['tab-7:leaf-7', '']
     ]
   )
   const agent = (id, title) => ({ id, type: 'claude', state: 'done', cwd: '/work/x', name: 'x', title, updatedAt: 0 })
@@ -450,6 +455,8 @@ test('labels: agents sharing a workspace get a title or a number, others none', 
 
 const READER = {
   ok: true,
+  // What the reader found in the agents' catalogs; Claude has none.
+  names: { codex: { 'gpt-6-test': 'GPT-6 Test' } },
   models: [
     { agent: 'codex', model: 'gpt-6-test', effort: 'high', tokPerSec: 40, latest: 44, samples: 12, estimated: true },
     { agent: 'claude', model: 'claude-test-5-2', effort: 'high', tokPerSec: 82.4, latest: 90, samples: 30, estimated: true },
@@ -465,7 +472,7 @@ const READER = {
     { id: 'tab-5:leaf-a', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-5-2', effort: 'high', contextTokens: 20_000, contextWindow: 200_000, windowEstimated: true },
     // An effort no response was measured at in the period: a group of its own, no speed.
     { id: 'tab-6:leaf-a', agent: 'codex', cwd: '/work/delta', state: 'done', model: 'gpt-6-test', effort: 'low', contextTokens: 20_000, contextWindow: 400_000, windowEstimated: false },
-    { id: null, key: 'session-b', agent: 'dsh', cwd: '/work/gamma', state: 'working', model: 'dsh-test-1', effort: '', contextTokens: 9000, contextWindow: null, windowEstimated: false }
+    { id: 'tab-7:leaf-7', agent: 'dsh', cwd: '/work/gamma', state: 'idle', model: 'dsh-test-1', effort: '', contextTokens: 9000, contextWindow: null, windowEstimated: false }
   ]
 }
 
@@ -474,46 +481,45 @@ function groupsOf(reader) {
   return buildGroups(reader, labelAgents(flattenAgents(fixture('worktree-ps.json')), titles))
 }
 
-test('model names: Claude and GPT ids as their makers write them', () => {
+test('model names: the generic rule splits the id into words, with no list behind it', () => {
   assert.equal(modelLabel('claude-fable-5-2'), 'Claude Fable 5.2')
-  assert.equal(modelLabel('claude-opus-5-5'), 'Claude Opus 5.5')
   assert.equal(modelLabel('claude-opus-4'), 'Claude Opus 4')
-  assert.equal(modelLabel('claude-sonnet-4-5-20250929'), 'Claude Sonnet 4.5')
-  assert.equal(modelLabel('claude-3-5-sonnet-20241022'), 'Claude 3.5 Sonnet')
-  // A bracketed suffix is kept.
+  assert.equal(modelLabel('deepseek-v4.1-flash-eco'), 'Deepseek V4.1 Flash Eco')
+  // Capitals already there are kept; a trailing number stays a number.
+  assert.equal(modelLabel('DeepSeek-V4.1-Flash-1017'), 'DeepSeek V4.1 Flash 1017')
+  // Only short numbers side by side are one version: a date is a word of its own.
+  assert.equal(modelLabel('claude-sonnet-4-5-20250929'), 'Claude Sonnet 4.5 20250929')
+  assert.equal(modelLabel('model-1-2-3'), 'Model 1.2.3')
+  // Separators: - _ : and spaces.
+  assert.equal(modelLabel('local_test_1'), 'Local Test 1')
+  assert.equal(modelLabel('some:model name'), 'Some Model Name')
+  // A leading v and digits is a version, whatever follows.
+  assert.equal(modelLabel('v9'), 'V9')
+  assert.equal(modelLabel('thing-v2.0-beta'), 'Thing V2.0 Beta')
+  // Acronyms in an all-lower-case id are not restored: that is the price of no lists.
+  assert.equal(modelLabel('glm-5'), 'Glm 5')
+  assert.equal(modelLabel('gpt-5.1-codex-max'), 'Gpt 5.1 Codex Max')
+  // A bracketed suffix stays, as (1M).
   assert.equal(modelLabel('claude-fable-5-2[1m]'), 'Claude Fable 5.2 (1M)')
-  assert.equal(modelLabel('gpt-6-test'), 'GPT-6 Test')
-  assert.equal(modelLabel('gpt-5.1-codex-max'), 'GPT-5.1 Codex Max')
-  assert.equal(modelLabel('gpt-4o-mini'), 'GPT-4o Mini')
-  assert.equal(modelLabel('gpt-6'), 'GPT-6')
-})
-
-test('model names: any other id is split into words, vendors and versions capitalized', () => {
-  assert.equal(modelLabel('deepseek-v9.1-flash-eco'), 'DeepSeek V9.1 Flash Eco')
-  // Capitals already there are kept, and a trailing number stays a number.
-  assert.equal(modelLabel('DeepSeek-V9.1-Flash-0101'), 'DeepSeek V9.1 Flash 0101')
-  for (const [id, name] of [
-    ['glm-5', 'GLM 5'],
-    ['kimi-k3', 'Kimi K3'],
-    ['qwen3-coder-plus', 'Qwen3 Coder Plus'],
-    ['qwen2.5-coder:32b', 'Qwen2.5 Coder 32b'],
-    ['gemini-2.5-pro', 'Gemini 2.5 Pro'],
-    ['grok-4-fast', 'Grok 4 Fast'],
-    ['mistral-large-latest', 'Mistral Large Latest'],
-    ['llama-3.3-70b', 'Llama 3.3 70b'],
-    ['o3-mini', 'o3 Mini'],
-    ['local_test_1', 'Local Test 1'],
-    ['claude-next', 'Claude Next'],
-    ['some-model[beta]', 'Some Model (BETA)']
-  ]) {
-    assert.equal(modelLabel(id), name)
-  }
-  // A provider in front is not part of the model's name.
-  assert.equal(modelLabel('openrouter/deepseek/deepseek-v9.1-flash'), 'DeepSeek V9.1 Flash')
-  assert.equal(modelLabel('provider/claude-fable-5-2'), 'Claude Fable 5.2')
-  assert.equal(modelLabel('provider/gpt-6-test[1m]'), 'GPT-6 Test (1M)')
+  assert.equal(modelLabel('some-model[beta]'), 'Some Model (BETA)')
+  // A provider in front is not part of the model's name, however many there are.
+  assert.equal(modelLabel('openrouter/vendor/vendor-model-1'), 'Vendor Model 1')
+  assert.equal(modelLabel('provider/model-x[1m]'), 'Model X (1M)')
   assert.equal(modelLabel(''), '')
   assert.equal(modelLabel('provider/'), 'provider/')
+})
+
+test('model names: the agent\'s own catalog name wins, else the generic rule', () => {
+  const names = { codex: { 'cat-model-1': 'Catalog Model One', 'blank': '' }, pi: { 'local-x': ' ' } }
+  assert.equal(modelName(names, 'codex', 'cat-model-1'), 'Catalog Model One')
+  // The same id under another agent is not borrowed.
+  assert.equal(modelName(names, 'pi', 'cat-model-1'), 'Cat Model 1')
+  // An empty name, an unknown id, no catalog at all and ids that look like object keys.
+  assert.equal(modelName(names, 'codex', 'blank'), 'Blank')
+  assert.equal(modelName(names, 'codex', 'other-model-2'), 'Other Model 2')
+  assert.equal(modelName(undefined, 'codex', 'other-model-2'), 'Other Model 2')
+  assert.equal(modelName(names, 'codex', 'constructor'), 'Constructor')
+  assert.equal(modelName(names, 'toString', 'x'), 'X')
 })
 
 test('groups: per model and effort, kinds in a fixed order, agents under theirs', () => {
@@ -530,7 +536,8 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
       // An agent whose effort had no measured response in the period still has its heading.
       ['codex', 'GPT-6 Test', 'low', null, [['delta', 'develop', 'codex: review']]],
       // pi's model has a speed but no live agent runs it: no heading for it.
-      ['dsh', 'Dsh Test 1', '', null, [['', 'gamma', '']]]
+      // DSH is named from Orca's list like the others: repository and workspace.
+      ['dsh', 'Dsh Test 1', '', null, [['gamma-repo', 'gamma', '']]]
     ]
   )
   // The id stays next to the name, for the tooltip.
@@ -552,18 +559,16 @@ test('groups: speeds alone, with no live agent, show nothing', () => {
   assert.deepEqual(buildGroups({}), [])
 })
 
-test('groups: sessions Orca does not list are numbered by their own key', () => {
-  const dsh = (key, tokens) => ({ id: null, key, agent: 'dsh', cwd: '/work/gamma', state: 'idle', model: 'dsh-test-1', contextTokens: tokens, contextWindow: 100_000, windowEstimated: false })
-  const groups = buildGroups({ models: [], agents: [dsh('session-b', 50_000), dsh('session-a', 10_000), { ...dsh('session-c', 1000), cwd: '/work/other' }] })
-  // Sorted by fullness on screen, numbered by key underneath.
+test('groups: a session Orca does not list is no row, and a listed DSH agent keeps Orca\'s state', () => {
+  const dsh = (id, tokens) => ({ id, agent: 'dsh', cwd: '/work/gamma', state: 'idle', model: 'dsh-test-1', contextTokens: tokens, contextWindow: 100_000, windowEstimated: false })
+  const listed = labelAgents(flattenAgents(fixture('worktree-ps.json')), new Map())
+  const groups = buildGroups({ models: [], agents: [dsh('tab-7:leaf-7', 50_000)] }, listed)
   assert.deepEqual(
-    groups[0].rows.map((row) => [row.name, row.sub, row.percent]),
-    [
-      ['gamma', '#2', 50],
-      ['gamma', '#1', 10],
-      ['other', '', 1]
-    ]
+    groups.map((group) => group.rows.map((row) => [row.repo, row.name, row.state, row.working, row.percent])),
+    [[['gamma-repo', 'gamma', 'working', true, 50]]]
   )
+  // The reader gives no row for a session that is not listed; speeds alone show nothing.
+  assert.deepEqual(buildGroups({ models: [{ agent: 'dsh', model: 'dsh-test-1', effort: '', tokPerSec: 100, latest: 100, samples: 2 }], agents: [] }, listed), [])
 })
 
 test('consent: only the refusal for want of approval counts', () => {

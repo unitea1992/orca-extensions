@@ -594,7 +594,15 @@ function baseName(path) {
   return parts.length > 0 ? parts[parts.length - 1] : String(path)
 }
 
-const LISTED_AGENTS = new Set(['claude', 'codex', 'pi', 'opencode'])
+/** Orca's `agentType` → the kind the reader knows. DSH's terminal agent is `dsh-tui`. */
+const LISTED_AGENTS = new Map([
+  ['claude', 'claude'],
+  ['codex', 'codex'],
+  ['pi', 'pi'],
+  ['opencode', 'opencode'],
+  ['dsh-tui', 'dsh'],
+  ['dsh', 'dsh']
+])
 
 /** `orca worktree ps --json` → the live agents the reader pairs with session logs. */
 export function flattenAgents(listed) {
@@ -606,7 +614,7 @@ export function flattenAgents(listed) {
       if (!LISTED_AGENTS.has(agent?.agentType) || typeof agent.paneKey !== 'string') continue
       agents.push({
         id: agent.paneKey,
-        type: agent.agentType,
+        type: LISTED_AGENTS.get(agent.agentType),
         state: String(agent.state ?? ''),
         cwd: worktree.path,
         name: workspace,
@@ -682,55 +690,30 @@ function capital(word) {
   return word === '' ? '' : word[0].toUpperCase() + word.slice(1)
 }
 
-/** Names whose capitals a rule cannot guess. Keys are lower case. */
-const VENDOR_NAMES = {
-  claude: 'Claude',
-  codex: 'Codex',
-  deepseek: 'DeepSeek',
-  ernie: 'ERNIE',
-  gemini: 'Gemini',
-  gemma: 'Gemma',
-  glm: 'GLM',
-  gpt: 'GPT',
-  grok: 'Grok',
-  kimi: 'Kimi',
-  llama: 'Llama',
-  minimax: 'MiniMax',
-  mistral: 'Mistral',
-  moonshot: 'Moonshot',
-  openai: 'OpenAI',
-  phi: 'Phi',
-  qwen: 'Qwen',
-  qwq: 'QwQ',
-  sensenova: 'SenseNova'
-}
-
 /** One word of a model id as it is written in a name. */
 function modelWord(word) {
-  const lower = word.toLowerCase()
-  if (Object.hasOwn(VENDOR_NAMES, lower)) return VENDOR_NAMES[lower]
-  // A version: v9.1 → V9.1.
-  if (/^v\d+(?:\.\d+)*$/.test(lower)) return `V${lower.slice(1)}`
-  // OpenAI's o-series is written small: o3.
-  if (/^o\d+$/.test(lower)) return lower
-  // A vendor with its version attached: qwen2.5 → Qwen2.5.
-  const attached = /^([a-z]+)(\d.*)$/.exec(lower)
-  if (attached && Object.hasOwn(VENDOR_NAMES, attached[1])) return `${VENDOR_NAMES[attached[1]]}${word.slice(attached[1].length)}`
-  // Anything else gets a capital and keeps the rest as written; digits stay as they are.
-  return capital(word)
+  // A version: v4.1 → V4.1.
+  if (/^v\d/.test(word)) return `V${word.slice(1)}`
+  // A word that is all lower case gets a first capital; one with capitals is the
+  // maker's own spelling and stays.
+  return word === word.toLowerCase() ? capital(word) : word
 }
 
 /**
- * A model id as a name to read.
+ * A model id as a name to read, with no list of makers or models behind it, so a model
+ * nobody has heard of yet is still named. It is the fallback: an agent's own model
+ * catalog, when it has one, names the model better (see `modelName`).
  *
  * - A provider in front is dropped: `provider/model` → the model.
- * - Claude and GPT ids are written the way their makers write them:
- *   `claude-fable-5-2` → `Claude Fable 5.2`, `gpt-5.1-codex-max` → `GPT-5.1 Codex Max`.
- * - Any other id is split at `-`, `_` and `:` into words: a known vendor gets its own
- *   capitals (`deepseek` → `DeepSeek`, `glm` → `GLM`), a version its `V`, other words a
- *   first capital, and numbers stay: `deepseek-v9.1-flash-eco` →
- *   `DeepSeek V9.1 Flash Eco`.
+ * - The id is split at `-`, `_`, `:` and spaces into words. Two short numbers side by
+ *   side are one version: `5-2` → `5.2`. Longer numbers (a date, a build) stay apart.
+ * - A word that is all lower case gets a first capital, a version its `V`; a word with
+ *   capitals in it is kept as it is: `deepseek-v4.1-flash-eco` →
+ *   `Deepseek V4.1 Flash Eco`, `DeepSeek-V4.1-Flash-1017` → `DeepSeek V4.1 Flash 1017`.
  * - A bracketed suffix stays, as `(1M)`.
+ *
+ * Acronyms written in lower case in the id are not restored (`glm-5` → `Glm 5`): that is
+ * what a list would be needed for.
  */
 export function modelLabel(id) {
   const text = String(id ?? '').trim()
@@ -738,20 +721,24 @@ export function modelLabel(id) {
   const suffix = bracket ? ` (${bracket[2].toUpperCase()})` : ''
   const base = (bracket ? bracket[1] : text).replace(/^.*\//, '')
   if (base === '') return text
-  // claude-<family>-<major>[-<minor>][-<date>]
-  let match = /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(base)
-  if (match) return `Claude ${capital(match[1])} ${match[2]}${match[3] ? `.${match[3]}` : ''}${suffix}`
-  // claude-<major>[-<minor>]-<family>[-<date>]
-  match = /^claude-(\d{1,2})(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/.exec(base)
-  if (match) return `Claude ${match[1]}${match[2] ? `.${match[2]}` : ''} ${capital(match[3])}${suffix}`
-  // gpt-<version>[-<words>]
-  match = /^gpt-(\d+(?:\.\d+)?[a-z]?)((?:-[a-z0-9.]+)*)$/.exec(base)
-  if (match) {
-    const words = match[2].split('-').filter(Boolean).map(modelWord)
-    return `GPT-${match[1]}${words.length > 0 ? ` ${words.join(' ')}` : ''}${suffix}`
+  const words = []
+  for (const token of base.split(/[-_:\s]+/).filter(Boolean)) {
+    const last = words.length - 1
+    if (last >= 0 && /^\d{1,2}(?:\.\d+)*$/.test(words[last]) && /^\d{1,2}$/.test(token)) {
+      words[last] = `${words[last]}.${token}`
+    } else {
+      words.push(modelWord(token))
+    }
   }
-  const words = base.split(/[-_:\s]+/).filter(Boolean).map(modelWord)
   return `${words.join(' ')}${suffix}`
+}
+
+/** The name to show for a model: its agent's catalog name from the reader, else the id
+ *  spelled by the generic rule. */
+export function modelName(names, agent, id) {
+  const known = names?.[agent]
+  if (known && Object.hasOwn(known, id) && typeof known[id] === 'string' && known[id] !== '') return known[id]
+  return modelLabel(id)
 }
 
 /**
@@ -770,7 +757,7 @@ export function buildGroups(reader, agents = []) {
       group = {
         agent,
         model: model ?? null,
-        label: model ? modelLabel(model) : null,
+        label: model ? modelName(reader.names, agent, model) : null,
         effort: model ? String(effort ?? '') : '',
         tokPerSec: null,
         latest: null,
@@ -790,7 +777,7 @@ export function buildGroups(reader, agents = []) {
     group.estimated = Boolean(model.estimated)
   }
   for (const row of reader.agents ?? []) {
-    const known = row.id === null ? undefined : live.get(row.id)
+    const known = live.get(row.id)
     const tokens = typeof row.contextTokens === 'number' ? row.contextTokens : null
     const window = typeof row.contextWindow === 'number' && row.contextWindow > 0 ? row.contextWindow : null
     const state = known?.state ?? row.state ?? ''
@@ -799,8 +786,6 @@ export function buildGroups(reader, agents = []) {
       name: known?.name ?? baseName(row.cwd ?? ''),
       repo: known?.repo ?? '',
       sub: known?.sub ?? '',
-      // Sessions Orca does not list (DSH) are told apart below, by directory and key.
-      unlisted: row.id === null ? { where: `${row.agent}\u0000${row.cwd ?? ''}`, key: String(row.key ?? '') } : null,
       state,
       working: state === 'working',
       tokens,
@@ -810,20 +795,7 @@ export function buildGroups(reader, agents = []) {
     })
   }
   const list = [...groups.values()]
-  const unlisted = new Map()
-  for (const row of list.flatMap((group) => group.rows)) {
-    if (!row.unlisted) continue
-    const rows = unlisted.get(row.unlisted.where) ?? []
-    rows.push(row)
-    unlisted.set(row.unlisted.where, rows)
-  }
-  for (const rows of unlisted.values()) {
-    if (rows.length < 2) continue
-    rows.sort((left, right) => left.unlisted.key.localeCompare(right.unlisted.key))
-    rows.forEach((row, index) => (row.sub = `#${index + 1}`))
-  }
   for (const group of list) {
-    for (const row of group.rows) delete row.unlisted
     group.rows.sort(
       (left, right) =>
         Number(right.working) - Number(left.working) ||
