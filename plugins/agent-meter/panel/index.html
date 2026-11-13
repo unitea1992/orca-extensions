@@ -134,18 +134,9 @@
         grid-template-columns: minmax(0, 1fr) 64px 52px;
         align-items: center;
         gap: 8px;
-        width: 100%;
         padding: 5px 0 5px 8px;
-        border: none;
         border-top: 1px solid var(--line);
-        background: transparent;
-        color: inherit;
-        font: inherit;
-        text-align: left;
       }
-      button.row { cursor: pointer; }
-      button.row:hover { background: var(--fill); color: var(--orca-accent-foreground, var(--fg)); }
-      button.row:focus-visible { outline: 1px solid var(--orca-ring, var(--hi)); outline-offset: -1px; }
       .name { min-width: 0; }
       .name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sub { padding-left: 11px; font-size: 10px; color: var(--quiet); }
@@ -246,23 +237,10 @@
         if (stalled) el.where.append(node('span', 'stale', `更新が止まっています（${ageText(snapshot.fetchedAt)}）`))
       }
 
-      function shortModel(model) {
-        return String(model).replace(/^claude-/, '')
-      }
-
       function renderRow(row) {
-        // Every row can be pressed: it shows that agent's workspace in Orca.
-        const element = node('button', 'row')
-        element.type = 'button'
-        element.addEventListener('click', () => {
-          el.notice.hidden = true
-          void orca.plugin
-            .request('row.open', { id: row.id, name: row.name, path: row.path, repo: row.repo, keys: row.keys, hosts: row.hosts })
-            .catch((error) => {
-              el.notice.textContent = String(error?.message ?? error)
-              el.notice.hidden = false
-            })
-        })
+        // A row is not pressable: neither Orca's plugin API nor its CLI can switch this
+        // desktop to a workspace on the paired server.
+        const element = node('div', 'row')
         const name = node('span', 'name')
         const first = node('span')
         first.append(node('span', row.working ? 'dot working' : 'dot'), row.name)
@@ -298,7 +276,8 @@
         const head = node('div', 'head')
         const what = node('span', group.model ? 'what' : 'what none')
         what.append(node('span', 'kind', AGENT_LABELS[group.agent] ?? group.agent))
-        what.append(group.model ? shortModel(group.model) : 'セッション未検出')
+        // The model by name, then the reasoning effort it ran with when the log names one.
+        what.append(group.model ? `${group.label ?? group.model}${group.effort ? ` (${group.effort})` : ''}` : 'セッション未検出')
         if (group.model) what.title = group.model
         head.append(what)
         const speed = node('span', 'speed')

@@ -528,12 +528,7 @@ function runCli(args, timeout = CLI_TIMEOUT_MS) {
         reject(fail('action_failed', `orca ${args.slice(0, 2).join(' ')}: ${detail}`))
         return
       }
-      const result = payload.result ?? payload
-      // The envelope names the runtime that answered: one more way a host may be called.
-      if (payload._meta && typeof result === 'object' && result !== null && result._meta === undefined) {
-        result._meta = payload._meta
-      }
-      resolve(result)
+      resolve(payload.result ?? payload)
     }
     if (process.platform === 'win32') {
       // An npm .cmd shim cannot be spawned without a shell. `exec` takes one command
@@ -604,24 +599,8 @@ const LISTED_AGENTS = new Set(['claude', 'codex', 'pi', 'opencode'])
 /** `orca worktree ps --json` → the live agents the reader pairs with session logs. */
 export function flattenAgents(listed) {
   const agents = []
-  const strings = (values) => [...new Set(values.filter((value) => typeof value === 'string' && value !== ''))]
   for (const worktree of listed?.worktrees ?? []) {
     if (typeof worktree?.path !== 'string') continue
-    // Everything the server calls this worktree and its host. Which of these the
-    // desktop's `workspace.list` uses is not documented, so a click tries them all.
-    const keys = strings([
-      worktree.worktreeId,
-      worktree.identity?.key,
-      worktree.identity?.instanceId,
-      worktree.worktreeInstanceId
-    ])
-    const hosts = strings([
-      worktree.environment?.id,
-      worktree.environment?.name,
-      worktree.hostId,
-      worktree.identity?.executionHostId,
-      listed?._meta?.runtimeId
-    ])
     for (const agent of worktree.agents ?? []) {
       if (!LISTED_AGENTS.has(agent?.agentType) || typeof agent.paneKey !== 'string') continue
       agents.push({
@@ -629,16 +608,21 @@ export function flattenAgents(listed) {
         type: agent.agentType,
         state: String(agent.state ?? ''),
         cwd: worktree.path,
-        keys,
-        hosts,
-        repo: typeof worktree.repo === 'string' ? worktree.repo : '',
-        name: String(worktree.displayName || baseName(worktree.path)),
+        name: workspaceLabel(worktree),
         title: cleanTitle(agent.displayName || agent.taskTitle),
         updatedAt: Number(agent.updatedAt) || 0
       })
     }
   }
   return agents
+}
+
+/** `repository · workspace`, as the row is named; the repository is left out when Orca
+ *  gives none or it says the same as the workspace. */
+function workspaceLabel(worktree) {
+  const name = String(worktree.displayName || baseName(worktree.path))
+  const repo = typeof worktree.repo === 'string' ? worktree.repo.trim() : ''
+  return repo !== '' && repo !== name ? `${repo} · ${name}` : name
 }
 
 function cleanTitle(value) {
@@ -685,17 +669,6 @@ export function terminalTitles(listed) {
   return titles
 }
 
-/** `orca terminal list --json` → pane key (`tabId:leafId`) → terminal handle. */
-export function terminalHandles(listed) {
-  const handles = new Map()
-  for (const terminal of listed?.terminals ?? []) {
-    if (typeof terminal?.handle !== 'string' || !SAFE_ARG.test(terminal.handle)) continue
-    if (typeof terminal.tabId !== 'string' || typeof terminal.leafId !== 'string') continue
-    handles.set(`${terminal.tabId}:${terminal.leafId}`, terminal.handle)
-  }
-  return handles
-}
-
 // ---------------------------------------------------------------------------
 // Snapshot: what the panel shows
 
@@ -704,127 +677,61 @@ function order(agent) {
   return index === -1 ? AGENT_ORDER.length : index
 }
 
-/** A path as compared between hosts: either separator, no trailing one. Case is kept:
- *  the agents run on Linux. */
-function normalPath(value) {
-  return String(value ?? '')
-    .replace(/\\/g, '/')
-    .replace(/\/+$/, '')
-}
-
-/** A string long enough to stand for one worktree when found inside a longer id. */
-function distinctive(key) {
-  return key.length >= 12
+function capital(word) {
+  return word === '' ? '' : word[0].toUpperCase() + word.slice(1)
 }
 
 /**
- * The workspace of this desktop's Orca that a row stands for, from `workspace.list`.
- * → `{ entry, how }`, or null.
- *
- * The row comes from the server (`orca worktree ps`, or a session log), the list from
- * this desktop, and nothing documents which field of one equals which of the other. So
- * the ways are tried from the surest down:
- *
- * 1. `id`: the workspace id is one of the server's own ids for the worktree.
- * 2. `id-part`: the workspace id contains one of them, or ends in `::<path>`, the tail
- *    of the server's `<repoId>::<path>`.
- * 3. `path`: the same path. A repository's main checkout is a workspace like any
- *    other, so the kind is not looked at.
- * 4. `name`: the same workspace name, in a folder or project of the same name.
- * 5. `folder`: nothing but the folder name agrees. This one opens only when a single
- *    workspace is left (on the paired server, if any is there); with several it
- *    answers `{ entry: null, how: 'folder', count }` and nothing is opened.
- *
- * Where one of the first four finds several (the same path here and on a server), the
- * one whose `hostId` is among the names the paired server goes by is taken, else a
- * remote one, else the first.
+ * A model id as a name to read: `claude-fable-5-2` → `Claude Fable 5.2`,
+ * `gpt-5.1-codex-max` → `GPT-5.1 Codex Max`. A bracketed suffix stays, as `(1M)`. Only shapes that
+ * are known are rewritten; anything else is shown as the id it is.
  */
-export function pickWorkspace(workspaces, row, extraHosts = []) {
-  const list = Array.isArray(workspaces) ? workspaces.filter((entry) => typeof entry?.id === 'string') : []
-  const keys = (row.keys ?? []).filter(Boolean)
-  const path = normalPath(row.path)
-  const folder = baseName(path)
-  const hosts = [...(row.hosts ?? []), ...extraHosts].filter(Boolean)
-  const ways = [
-    ['id', (entry) => keys.includes(entry.id)],
-    [
-      'id-part',
-      (entry) =>
-        keys.some((key) => distinctive(key) && entry.id.includes(key)) ||
-        (path !== '' && normalPath(entry.id).endsWith(`::${path}`))
-    ],
-    ['path', (entry) => path !== '' && normalPath(entry.path) === path],
-    [
-      'name',
-      (entry) =>
-        Boolean(row.name) &&
-        entry.name === row.name &&
-        folder !== '' &&
-        (baseName(normalPath(entry.path)) === folder || entry.project === folder || (Boolean(row.repo) && entry.project === row.repo))
-    ]
-  ]
-  for (const [how, matches] of ways) {
-    const found = list.filter(matches)
-    if (found.length === 0) continue
-    const entry =
-      found.find((candidate) => typeof candidate.hostId === 'string' && hosts.includes(candidate.hostId)) ??
-      found.find((candidate) => typeof candidate.hostId === 'string') ??
-      found[0]
-    return { entry, how }
+export function modelLabel(id) {
+  const text = String(id ?? '')
+  const bracket = /^(.*?)\[([^\]]+)\]$/.exec(text)
+  const base = bracket ? bracket[1] : text
+  const suffix = bracket ? ` (${bracket[2].toUpperCase()})` : ''
+  // claude-<family>-<major>[-<minor>][-<date>]
+  let match = /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(base)
+  if (match) return `Claude ${capital(match[1])} ${match[2]}${match[3] ? `.${match[3]}` : ''}${suffix}`
+  // claude-<major>[-<minor>]-<family>[-<date>]
+  match = /^claude-(\d{1,2})(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/.exec(base)
+  if (match) return `Claude ${match[1]}${match[2] ? `.${match[2]}` : ''} ${capital(match[3])}${suffix}`
+  // gpt-<version>[-<words>]
+  match = /^gpt-(\d+(?:\.\d+)?)((?:-[a-z0-9.]+)*)$/.exec(base)
+  if (match) {
+    const words = match[2].split('-').filter(Boolean).map(capital)
+    return `GPT-${match[1]}${words.length > 0 ? ` ${words.join(' ')}` : ''}${suffix}`
   }
-  if (folder === '') return null
-  const sameFolder = list.filter(
-    (entry) => baseName(normalPath(entry.path)) === folder || normalPath(entry.id).endsWith(`/${folder}`)
-  )
-  const onServer = sameFolder.filter((entry) => typeof entry.hostId === 'string' && hosts.includes(entry.hostId))
-  const left = onServer.length > 0 ? onServer : sameFolder
-  if (left.length === 0) return null
-  return left.length === 1 ? { entry: left[0], how: 'folder' } : { entry: null, how: 'folder', count: left.length }
+  return text
 }
 
-/**
- * Why a row's workspace was not found, as log lines: how many workspaces the desktop
- * listed and on which hosts, what was looked for, and the entries that come closest
- * (the same folder name or workspace name, else the first few). The log stays on this
- * machine, so the values are written as they are.
- */
-export function describeWorkspaceMiss(listed, row, extraHosts = []) {
-  const list = Array.isArray(listed?.workspaces) ? listed.workspaces : []
-  const folder = baseName(normalPath(row.path))
-  const hostCounts = new Map()
-  for (const entry of list) hostCounts.set(String(entry?.hostId), (hostCounts.get(String(entry?.hostId)) ?? 0) + 1)
-  const near = list.filter(
-    (entry) =>
-      (folder !== '' && (baseName(normalPath(entry?.path)) === folder || String(entry?.id).endsWith(folder) || entry?.project === folder)) ||
-      (Boolean(row.name) && entry?.name === row.name)
-  )
-  const shown = (near.length > 0 ? near : list).slice(0, 10)
-  return [
-    `open: ワークスペースが見つかりません workspace.list=${list.length}件 truncated=${listed?.truncated === true} hostId別=${JSON.stringify(Object.fromEntries(hostCounts))}`,
-    `open: 探したキー name=${JSON.stringify(row.name ?? '')} path=${JSON.stringify(row.path ?? '')} repo=${JSON.stringify(row.repo ?? '')} keys=${JSON.stringify(row.keys ?? [])} hosts=${JSON.stringify([...new Set([...(row.hosts ?? []), ...extraHosts].filter(Boolean))])}`,
-    `open: ${near.length > 0 ? `近い候補 ${near.length}件` : '近い候補なし。先頭'}（${shown.length}件を表示）`,
-    ...shown.map(
-      (entry) =>
-        `open:   id=${JSON.stringify(entry?.id)} kind=${entry?.kind} hostId=${JSON.stringify(entry?.hostId)} name=${JSON.stringify(entry?.name)} project=${JSON.stringify(entry?.project ?? null)} branch=${JSON.stringify(entry?.branch ?? null)} path=${JSON.stringify(entry?.path)}`
-    )
-  ].map((line) => line.slice(0, 2000))
-}
-
-/** Reader result + Orca's agent list → groups per model with their live agents. */
+/** Reader result + Orca's agent list → groups per model and effort with their live
+ *  agents. One model at two efforts is two groups: each has its own speed. */
 export function buildGroups(reader, agents = []) {
   const live = new Map(agents.map((agent) => [agent.id, agent]))
   const groups = new Map()
-  const groupOf = (agent, model) => {
-    const key = `${agent}\u0000${model ?? ''}`
+  const groupOf = (agent, model, effort) => {
+    const key = `${agent}\u0000${model ?? ''}\u0000${effort ?? ''}`
     let group = groups.get(key)
     if (!group) {
-      group = { agent, model: model ?? null, tokPerSec: null, latest: null, samples: 0, estimated: false, rows: [] }
+      group = {
+        agent,
+        model: model ?? null,
+        label: model ? modelLabel(model) : null,
+        effort: model ? String(effort ?? '') : '',
+        tokPerSec: null,
+        latest: null,
+        samples: 0,
+        estimated: false,
+        rows: []
+      }
       groups.set(key, group)
     }
     return group
   }
   for (const model of reader.models ?? []) {
-    const group = groupOf(model.agent, model.model)
+    const group = groupOf(model.agent, model.model, model.effort)
     group.tokPerSec = model.tokPerSec
     group.latest = model.latest
     group.samples = model.samples
@@ -835,7 +742,7 @@ export function buildGroups(reader, agents = []) {
     const tokens = typeof row.contextTokens === 'number' ? row.contextTokens : null
     const window = typeof row.contextWindow === 'number' && row.contextWindow > 0 ? row.contextWindow : null
     const state = known?.state ?? row.state ?? ''
-    groupOf(row.agent, row.model).rows.push({
+    groupOf(row.agent, row.model, row.model ? row.effort : '').rows.push({
       id: row.id,
       name: known?.name ?? baseName(row.cwd ?? ''),
       sub: known?.sub ?? '',
@@ -846,12 +753,7 @@ export function buildGroups(reader, agents = []) {
       tokens,
       window,
       percent: tokens !== null && window !== null ? (tokens / window) * 100 : null,
-      windowEstimated: Boolean(row.windowEstimated),
-      // What a click needs to find the workspace on this desktop.
-      path: known?.cwd ?? row.cwd ?? '',
-      keys: known?.keys ?? [],
-      hosts: known?.hosts ?? [],
-      repo: known?.repo ?? ''
+      windowEstimated: Boolean(row.windowEstimated)
     })
   }
   const list = [...groups.values()]
@@ -882,7 +784,8 @@ export function buildGroups(reader, agents = []) {
       order(left.agent) - order(right.agent) ||
       // A kind's agents without a session come after its models.
       Number(left.model === null) - Number(right.model === null) ||
-      String(left.model).localeCompare(String(right.model))
+      String(left.model).localeCompare(String(right.model)) ||
+      left.effort.localeCompare(right.effort)
   )
 }
 
@@ -919,7 +822,7 @@ let knownSettings = {}
 /** Orca is refusing the settings for want of approval. */
 let consentRefused = false
 let environment = { arg: 'local', label: 'local' }
-let terminals = { at: 0, environment: '', handles: new Map(), titles: new Map() }
+let terminals = { at: 0, environment: '', titles: new Map() }
 
 function logOnce(orca, line) {
   // A panel asks every few seconds while it is open; only say what changed.
@@ -968,16 +871,11 @@ async function readSettings(orca) {
   return settings
 }
 
-/** → `{ handles, titles }` of the server's terminals, by pane key. */
+/** → `{ titles }` of the server's terminals, by pane key: what labels an untitled agent. */
 async function readTerminals(target) {
   if (terminals.environment === target && Date.now() - terminals.at < TERMINALS_TTL_MS) return terminals
   const listed = await runCli(['terminal', 'list', '--json', '--environment', target, '--limit', '500'])
-  terminals = {
-    at: Date.now(),
-    environment: target,
-    handles: terminalHandles(listed),
-    titles: terminalTitles(listed)
-  }
+  terminals = { at: Date.now(), environment: target, titles: terminalTitles(listed) }
   return terminals
 }
 
@@ -1067,73 +965,6 @@ export function snapshotFor(orca, force = false) {
   return read(orca)
 }
 
-/**
- * A row was pressed: show that agent's workspace in this desktop's Orca.
- *
- * Most agents run in Orca's chat view, which has no terminal and no CLI command to
- * switch to, so the workspace is what can be opened for every row: `workspace.list`
- * finds it by the server's worktree id or its path, `workspace.open` shows it, as a
- * press in Orca's own sidebar does. An agent that does run in a terminal has that
- * terminal brought forward as well.
- */
-async function openRow(orca, input) {
-  const texts = (value) => (Array.isArray(value) ? value.filter((entry) => typeof entry === 'string') : [])
-  const row = {
-    id: input?.id ?? null,
-    name: String(input?.name ?? ''),
-    path: String(input?.path ?? ''),
-    repo: String(input?.repo ?? ''),
-    keys: texts(input?.keys),
-    hosts: texts(input?.hosts)
-  }
-  // The pairing as this desktop names it, on top of what the server said of itself.
-  const pairing = [environment.arg, environment.label]
-  let opened = false
-  let reason = ''
-  const granted = (kind) => orca.grantedCapabilities.includes(kind)
-  if (!granted('workspace:read') || !granted('workspace:write')) {
-    reason = 'ワークスペースを開く権限がありません。プラグインの承認をやり直してください'
-  } else {
-    try {
-      const listed = await orca.host.call('workspace.list', {})
-      const found = pickWorkspace(listed?.workspaces, row, pairing)
-      if (found?.entry) {
-        orca.log(`open: ${found.how} で一致 id=${JSON.stringify(found.entry.id)} hostId=${JSON.stringify(found.entry.hostId ?? null)}`)
-        await orca.host.call('workspace.open', { workspaceId: found.entry.id })
-        opened = true
-      } else if (found) {
-        // Only the folder name agrees, and for more than one: opening a guess is worse
-        // than opening nothing.
-        for (const line of describeWorkspaceMiss(listed, row, pairing)) orca.log(line)
-        reason = `フォルダ名が ${baseName(normalPath(row.path))} のワークスペースが ${found.count} 件あり、どれか決められません。詳細は orca plugin logs に出ています`
-      } else {
-        for (const line of describeWorkspaceMiss(listed, row, pairing)) orca.log(line)
-        reason =
-          `この Orca に ${row.name || baseName(row.path) || 'その'} のワークスペースが見つかりません` +
-          (listed?.truncated === true
-            ? '（Orca がワークスペースの一覧を途中で打ち切っているので、一覧に入っていない可能性があります）'
-            : '') +
-          '。詳細は orca plugin logs に出ています'
-      }
-    } catch (error) {
-      reason = isConsentError(error)
-        ? 'Orca の承認が、このプラグインの現在の内容と合っていません。承認をやり直してください'
-        : `ワークスペースを開けません: ${error?.message ?? error}`
-    }
-  }
-  const handle = row.id === null ? undefined : terminals.handles.get(String(row.id))
-  if (handle) {
-    try {
-      await runCli(['terminal', 'focus', '--terminal', handle, '--environment', environment.arg, '--json'])
-      opened = true
-    } catch (error) {
-      if (!opened) reason = reason || `端末に移動できません: ${error.message}`
-    }
-  }
-  if (!opened) throw fail('action_failed', reason)
-  return { ok: true }
-}
-
 export default function activate(orca) {
   orca.log(
     `activate host-api ${orca.api.major}.${orca.api.minor} granted=${orca.grantedCapabilities.join(',')}`
@@ -1150,7 +981,6 @@ export default function activate(orca) {
   // Nothing is scheduled here. A panel asks while it is visible, and each ask is
   // answered with a read; with no panel open the worker does nothing at all.
   orca.panels.handle('snapshot.get', async (input) => snapshotFor(orca, input?.force === true))
-  orca.panels.handle('row.open', (input) => openRow(orca, input))
   // Also reachable without the panel: `orca plugin dev request <folder> connection.test`.
   orca.panels.handle('connection.test', async () => testConnection(orca, await readSettings(orca)))
 }

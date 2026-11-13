@@ -1,7 +1,7 @@
 {"type":"session","version":4,"id":"dsh-session","createdAt":1768471200000,"cwd":"/work/gamma","isSeeded":false,"delegationDepth":0}
 {"type":"turn/start","seq":1,"time":1768471200000,"data":{"turn":0}}
 {"type":"step/start","seq":2,"time":1768471200000,"data":{"turn":0,"step":0}}
-{"type":"request/header","seq":3,"time":1768471200050,"data":{"header":{"config":{"provider":"dshprov","model":"dsh-test-1"}},"reason":"fixture"}}
+{"type":"request/header","seq":3,"time":1768471200050,"data":{"header":{"config":{"provider":"dshprov","model":"dsh-test-1","reasoningEffort":"max"}},"reason":"fixture"}}
 {"type":"request/context","seq":4,"time":1768471200100,"data":{"provider":"dshprov","model":"dsh-test-1","contextWindow":128000}}
 {"type":"assistant/attempt","seq":5,"time":1768471200300,"data":{"turn":0,"step":0,"stream":[{"type":"chunk","time":1768471200300,"chunk":{"type":"error"}}]}}
 {"type":"assistant/message","seq":6,"time":1768471204200,"data":{"turn":0,"step":0,"message":{"role":"assistant","content":[]},"usage":{"input":1000,"output":300,"think":100,"cacheRead":40000,"cacheWrite":0},"stream":[{"type":"reasoning-chunks","index":0,"time0":1768471200600,"dt":[100,100],"texts":["a","b","c"]},{"type":"text-chunks","index":1,"time0":1768471200900,"dt":[1000,1000,1200],"texts":["a","b","c","d"]},{"type":"chunk","time":1768471204100,"chunk":{"type":"finish"}}]}}

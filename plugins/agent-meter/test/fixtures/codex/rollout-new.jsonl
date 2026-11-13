@@ -1,5 +1,5 @@
 {"timestamp":"2026-01-15T10:00:00.000Z","type":"session_meta","payload":{"id":"thread-new","cwd":"/work/alpha","originator":"fixture","source":"cli","thread_source":"user","base_instructions":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
-{"timestamp":"2026-01-15T10:00:00.500Z","type":"turn_context","payload":{"model":"gpt-test-1","cwd":"/work/alpha"}}
+{"timestamp":"2026-01-15T10:00:00.500Z","type":"turn_context","payload":{"model":"gpt-test-1","effort":"high","cwd":"/work/alpha"}}
 {"timestamp":"2026-01-15T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","model_context_window":400000}}
 {"timestamp":"2026-01-15T10:00:03.000Z","type":"response_item","payload":{"type":"reasoning"}}
 {"timestamp":"2026-01-15T10:00:05.000Z","type":"response_item","payload":{"type":"function_call","name":"fixture_tool"}}

@@ -4,13 +4,8 @@
       "handle": "term_one",
       "tabId": "tab-1",
       "leafId": "leaf-1",
+      "title": null,
       "worktreePath": "/work/alpha"
-    },
-    {
-      "handle": "term two",
-      "tabId": "tab-2",
-      "leafId": "leaf-2",
-      "worktreePath": "/work/beta"
     },
     {
       "handle": "term_three",

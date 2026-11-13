@@ -11,6 +11,7 @@ import {
   MIN_TOKENS,
   aggregate,
   claudeProjectDir,
+  cleanEffort,
   collect,
   dshStreamEnd,
   dshTokens,
@@ -81,7 +82,7 @@ test('parseJsonc reads comments and trailing commas', () => {
 test('aggregate applies the noise floor and the period', () => {
   const now = T0 + 60_000
   const since = now - 15 * 60_000
-  const entry = (tokens, ms, at, model = 'm', estimated = false) => ({ agent: 'pi', model, tokens, ms, at, estimated })
+  const entry = (tokens, ms, at, model = 'm', estimated = false, effort = '') => ({ agent: 'pi', model, effort, tokens, ms, at, estimated })
   assert.equal(eligible(entry(MIN_TOKENS - 1, 5000, T0), since, now), false)
   assert.equal(eligible(entry(500, MIN_MS - 1, T0), since, now), false)
   assert.equal(eligible(entry(500, 5000, since - 1), since, now), false)
@@ -91,15 +92,27 @@ test('aggregate applies the noise floor and the period', () => {
       entry(300, 1000, T0 + 2000),
       entry(200, 1000, T0 + 1000),
       entry(10, 1000, T0 + 3000),
-      entry(400, 2000, T0, 'other', true)
+      entry(400, 2000, T0, 'other', true),
+      // The same model at another effort is measured apart.
+      entry(900, 1000, T0, 'm', false, 'high')
     ],
     since,
     now
   )
   assert.deepEqual(models, [
-    { agent: 'pi', model: 'm', tokPerSec: 200, latest: 300, lastAt: T0 + 2000, samples: 3, estimated: false },
-    { agent: 'pi', model: 'other', tokPerSec: 200, latest: 200, lastAt: T0, samples: 1, estimated: true }
+    { agent: 'pi', model: 'm', effort: '', tokPerSec: 200, latest: 300, lastAt: T0 + 2000, samples: 3, estimated: false },
+    { agent: 'pi', model: 'other', effort: '', tokPerSec: 200, latest: 200, lastAt: T0, samples: 1, estimated: true },
+    { agent: 'pi', model: 'm', effort: 'high', tokPerSec: 900, latest: 900, lastAt: T0, samples: 1, estimated: false }
   ])
+})
+
+test('effort: what the log names, and nothing for no choice', () => {
+  assert.equal(cleanEffort(' high '), 'high')
+  assert.equal(cleanEffort('default'), '')
+  assert.equal(cleanEffort(''), '')
+  assert.equal(cleanEffort(null), '')
+  assert.equal(cleanEffort({ level: 'high' }), '')
+  assert.equal(cleanEffort('x'.repeat(40)), '')
 })
 
 // --- Claude Code ---------------------------------------------------------------
@@ -114,8 +127,8 @@ test('claude: blocks collapse by message id, start from api-request or parent', 
   const [first, second, side, short] = samples
   // msg_1: two blocks, the larger output_tokens, from the api-request record to the last block.
   assert.deepEqual(
-    { tokens: first.tokens, ms: first.ms, at: first.at, model: first.model, estimated: first.estimated },
-    { tokens: 400, ms: 4000, at: T0 + 4200, model: 'claude-test-1', estimated: true }
+    { tokens: first.tokens, ms: first.ms, at: first.at, model: first.model, effort: first.effort, estimated: first.estimated },
+    { tokens: 400, ms: 4000, at: T0 + 4200, model: 'claude-test-1', effort: 'high', estimated: true }
   )
   // msg_2: no requestRef, so from its parent, skipping the attachment.
   assert.deepEqual({ tokens: second.tokens, ms: second.ms }, { tokens: 150, ms: 3000 })
@@ -126,6 +139,7 @@ test('claude: blocks collapse by message id, start from api-request or parent', 
     tokens: 61_515,
     model: 'claude-test-1',
     at: T0 + 12_000,
+    effort: 'high',
     window: 200_000,
     windowEstimated: true
   })
@@ -146,6 +160,7 @@ test('claude: a request past 200k means the wide window', () => {
   assert.equal(context.tokens, 250_000)
   assert.equal(context.window, 1_000_000)
   assert.equal(rate(samples[0]), 100)
+  assert.deepEqual([samples[0].effort, context.effort], ['medium', 'medium'])
   const suffixed = parseClaude(fixture('claude/wide.jsonl').replaceAll('claude-test-1', 'claude-test-1[1m]'))
   assert.equal(suffixed.context.window, 1_000_000)
 })
@@ -156,7 +171,8 @@ test('codex: head gives cwd, subagent flag and first model', () => {
   assert.deepEqual(parseCodexHead(fixture('codex/rollout-new.jsonl')), {
     cwd: '/work/alpha',
     subagent: false,
-    model: 'gpt-test-1'
+    model: 'gpt-test-1',
+    effort: 'high'
   })
   // A child thread is marked by where it came from, or only by having a parent.
   assert.equal(parseCodexHead(fixture('codex/rollout-subagent.jsonl')).subagent, true)
@@ -177,10 +193,10 @@ test('codex: a response is timed without the tool run that follows it', () => {
   // 410 output tokens (reasoning included) from task start to the usage record: the
   // 30 s tool run is outside. The repeated token_count adds nothing.
   assert.deepEqual(
-    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, model: entry.model })),
+    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, model: entry.model, effort: entry.effort })),
     [
-      { tokens: 410, ms: 4100, model: 'gpt-test-1' },
-      { tokens: 150, ms: 3000, model: 'gpt-test-1' }
+      { tokens: 410, ms: 4100, model: 'gpt-test-1', effort: 'high' },
+      { tokens: 150, ms: 3000, model: 'gpt-test-1', effort: 'high' }
     ]
   )
   assert.deepEqual(context, {
@@ -188,6 +204,7 @@ test('codex: a response is timed without the tool run that follows it', () => {
     model: 'gpt-test-1',
     at: T0 + 38_020,
     window: 400_000,
+    effort: 'high',
     windowEstimated: false
   })
 })
@@ -209,8 +226,9 @@ test('codex: without token_usage_record the last output item ends the response',
 test('codex: a cut rollout takes its model from the head', () => {
   const lines = fixture('codex/rollout-new.jsonl').split('\n')
   const tail = lines.slice(2).join('\n')
-  assert.equal(parseCodex(tail).samples[0].model, 'unknown')
-  assert.equal(parseCodex(tail, { model: 'gpt-test-1' }).samples[0].model, 'gpt-test-1')
+  assert.deepEqual([parseCodex(tail).samples[0].model, parseCodex(tail).samples[0].effort], ['unknown', ''])
+  const cut = parseCodex(tail, { model: 'gpt-test-1', effort: 'high' }).samples[0]
+  assert.deepEqual([cut.model, cut.effort], ['gpt-test-1', 'high'])
 })
 
 // --- pi --------------------------------------------------------------------------
@@ -225,11 +243,11 @@ test('pi: durationMs and output, reasoning not added twice', () => {
   const { samples, context, cwd } = parsePi(fixture('pi/session.jsonl'), windows)
   assert.equal(cwd, '/work/alpha')
   assert.deepEqual(
-    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, estimated: entry.estimated })),
+    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, effort: entry.effort, estimated: entry.estimated })),
     [
-      { tokens: 200, ms: 4000, estimated: false },
-      { tokens: 300, ms: 2000, estimated: false },
-      { tokens: 0, ms: 100, estimated: false }
+      { tokens: 200, ms: 4000, effort: 'high', estimated: false },
+      { tokens: 300, ms: 2000, effort: 'high', estimated: false },
+      { tokens: 0, ms: 100, effort: 'high', estimated: false }
     ]
   )
   // The failed message has no usage, so the one before it is the context.
@@ -238,7 +256,8 @@ test('pi: durationMs and output, reasoning not added twice', () => {
     model: 'local-test-1',
     at: T0 + 14_000,
     window: 100_000,
-    windowEstimated: false
+    windowEstimated: false,
+    effort: 'high'
   })
   assert.equal(parsePi(fixture('pi/session.jsonl')).context.window, null)
 })
@@ -256,16 +275,19 @@ test('opencode: output plus reasoning over created to streamed', () => {
   })
   const first = opencodeMessage(row(messages[1]), windows)
   assert.deepEqual(
-    { tokens: first.sample.tokens, ms: first.sample.ms, model: first.sample.model },
-    { tokens: 200, ms: 4000, model: 'oc-test-1' }
+    { tokens: first.sample.tokens, ms: first.sample.ms, model: first.sample.model, effort: first.sample.effort },
+    { tokens: 200, ms: 4000, model: 'oc-test-1', effort: 'high' }
   )
   assert.deepEqual(first.context, {
     tokens: 20_500,
     model: 'oc-test-1',
     at: T0 + 6000,
     window: 200_000,
-    windowEstimated: false
+    windowEstimated: false,
+    effort: 'high'
   })
+  // The child session ran with no variant chosen.
+  assert.equal(opencodeMessage(row(messages[4]), windows).sample.effort, '')
   const streaming = opencodeMessage(row(messages[3]), windows)
   assert.deepEqual(streaming, { sample: null, context: null })
 })
@@ -284,10 +306,10 @@ test('dsh: request/context to the end of the stream, think added to output', () 
   const { header, samples, context, model, window } = parseDsh(fixture('dsh/session.jsonl'))
   assert.deepEqual(header, { cwd: '/work/gamma', subagent: false })
   assert.deepEqual(
-    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, at: entry.at, model: entry.model })),
+    samples.map((entry) => ({ tokens: entry.tokens, ms: entry.ms, at: entry.at, model: entry.model, effort: entry.effort })),
     [
-      { tokens: 400, ms: 4000, at: T0 + 4100, model: 'dsh-test-1' },
-      { tokens: 200, ms: 2000, at: T0 + 12_100, model: 'dsh-test-1' }
+      { tokens: 400, ms: 4000, at: T0 + 4100, model: 'dsh-test-1', effort: 'max' },
+      { tokens: 200, ms: 2000, at: T0 + 12_100, model: 'dsh-test-1', effort: 'max' }
     ]
   )
   assert.deepEqual(context, {
@@ -295,7 +317,8 @@ test('dsh: request/context to the end of the stream, think added to output', () 
     model: 'dsh-test-1',
     at: T0 + 12_100,
     window: 128_000,
-    windowEstimated: false
+    windowEstimated: false,
+    effort: 'max'
   })
   assert.deepEqual({ model, window }, { model: 'dsh-test-1', window: 128_000 })
 })
@@ -375,44 +398,58 @@ test('collect: speeds per model and a context per live agent', async () => {
     assert.equal(result.truncated, false)
     assert.equal(result.period, '15m')
 
-    const speed = Object.fromEntries(result.models.map((model) => [`${model.agent}/${model.model}`, model]))
-    // main: 100, 50, 200; wide: 100. Read once although two roots lead to the folder.
+    // One speed per kind, model and effort.
+    const speed = Object.fromEntries(result.models.map((model) => [`${model.agent}/${model.model}/${model.effort}`, model]))
+    // main at high: 100, 50, 200. Read once although two roots lead to the folder.
     assert.deepEqual(
-      { tokPerSec: speed['claude/claude-test-1'].tokPerSec, samples: speed['claude/claude-test-1'].samples, estimated: speed['claude/claude-test-1'].estimated },
-      { tokPerSec: 100, samples: 4, estimated: true }
+      { tokPerSec: speed['claude/claude-test-1/high'].tokPerSec, samples: speed['claude/claude-test-1/high'].samples, estimated: speed['claude/claude-test-1/high'].estimated },
+      { tokPerSec: 100, samples: 3, estimated: true }
     )
-    assert.equal(speed['claude/claude-test-mini'].tokPerSec, 150)
-    // The child thread's response counts for the model it ran: 100, 50 and its 125.
+    // The same model at medium, in the other session, has its own.
     assert.deepEqual(
-      { tokPerSec: speed['codex/gpt-test-1'].tokPerSec, latest: speed['codex/gpt-test-1'].latest, samples: speed['codex/gpt-test-1'].samples },
-      { tokPerSec: 100, latest: 125, samples: 3 }
+      { tokPerSec: speed['claude/claude-test-1/medium'].tokPerSec, samples: speed['claude/claude-test-1/medium'].samples },
+      { tokPerSec: 100, samples: 1 }
+    )
+    // No effort in the log: none in the key.
+    assert.equal(speed['claude/claude-test-mini/'].tokPerSec, 150)
+    assert.deepEqual(
+      { tokPerSec: speed['codex/gpt-test-1/high'].tokPerSec, latest: speed['codex/gpt-test-1/high'].latest, samples: speed['codex/gpt-test-1/high'].samples },
+      { tokPerSec: 75, latest: 50, samples: 2 }
+    )
+    // The child thread's response counts for the model and effort it ran.
+    assert.deepEqual(
+      { tokPerSec: speed['codex/gpt-test-1/low'].tokPerSec, samples: speed['codex/gpt-test-1/low'].samples },
+      { tokPerSec: 125, samples: 1 }
     )
     // Codex's automatic review runs under an internal name: no speed is shown for it.
     assert.equal(Object.keys(speed).some((key) => key.includes('codex-auto-review')), false)
-    assert.deepEqual(Object.keys(speed).filter((key) => key.startsWith('codex/')).sort(), ['codex/gpt-test-1', 'codex/gpt-test-2'])
-    // The rollout without token_usage_record, from the Orca account folder.
-    assert.equal(speed['codex/gpt-test-2'].tokPerSec, 87.5)
     assert.deepEqual(
-      { tokPerSec: speed['pi/local-test-1'].tokPerSec, samples: speed['pi/local-test-1'].samples, estimated: speed['pi/local-test-1'].estimated },
+      Object.keys(speed).filter((key) => key.startsWith('codex/')).sort(),
+      ['codex/gpt-test-1/high', 'codex/gpt-test-1/low', 'codex/gpt-test-2/']
+    )
+    // The rollout without token_usage_record, from the Orca account folder.
+    assert.equal(speed['codex/gpt-test-2/'].tokPerSec, 87.5)
+    assert.deepEqual(
+      { tokPerSec: speed['pi/local-test-1/high'].tokPerSec, samples: speed['pi/local-test-1/high'].samples, estimated: speed['pi/local-test-1/high'].estimated },
       { tokPerSec: 100, samples: 2, estimated: false }
     )
 
     const agents = Object.fromEntries(result.agents.map((row) => [row.id ?? `dsh:${row.cwd}`, row]))
     // 61,515 of a window that another session of the same model proved to be 1M.
     assert.deepEqual(
-      { model: agents['c-alpha'].model, tokens: agents['c-alpha'].contextTokens, window: agents['c-alpha'].contextWindow, estimated: agents['c-alpha'].windowEstimated, state: agents['c-alpha'].state },
-      { model: 'claude-test-1', tokens: 61_515, window: 1_000_000, estimated: true, state: 'working' }
+      { model: agents['c-alpha'].model, effort: agents['c-alpha'].effort, tokens: agents['c-alpha'].contextTokens, window: agents['c-alpha'].contextWindow, estimated: agents['c-alpha'].windowEstimated, state: agents['c-alpha'].state },
+      { model: 'claude-test-1', effort: 'high', tokens: 61_515, window: 1_000_000, estimated: true, state: 'working' }
     )
-    assert.equal(agents['c-beta'].contextTokens, 250_000)
+    assert.deepEqual([agents['c-beta'].contextTokens, agents['c-beta'].effort], [250_000, 'medium'])
     assert.deepEqual(
-      { model: agents['c-none'].model, tokens: agents['c-none'].contextTokens },
-      { model: null, tokens: null }
+      { model: agents['c-none'].model, effort: agents['c-none'].effort, tokens: agents['c-none'].contextTokens },
+      { model: null, effort: '', tokens: null }
     )
     // The child threads are newer, and one is at 98%, but neither is the agent's own
     // thread: the row shows the agent's context, and no row is made for them.
     assert.deepEqual(
-      { model: agents['x-alpha'].model, tokens: agents['x-alpha'].contextTokens, window: agents['x-alpha'].contextWindow },
-      { model: 'gpt-test-1', tokens: 100_800, window: 400_000 }
+      { model: agents['x-alpha'].model, effort: agents['x-alpha'].effort, tokens: agents['x-alpha'].contextTokens, window: agents['x-alpha'].contextWindow },
+      { model: 'gpt-test-1', effort: 'high', tokens: 100_800, window: 400_000 }
     )
     assert.deepEqual(
       { tokens: agents['p-alpha'].contextTokens, window: agents['p-alpha'].contextWindow },
@@ -423,19 +460,20 @@ test('collect: speeds per model and a context per live agent', async () => {
 
     if (hasSqlite) {
       assert.deepEqual(
-        { tokPerSec: speed['opencode/oc-test-1'].tokPerSec, samples: speed['opencode/oc-test-1'].samples },
-        { tokPerSec: 100, samples: 3 }
+        { tokPerSec: speed['opencode/oc-test-1/high'].tokPerSec, samples: speed['opencode/oc-test-1/high'].samples },
+        { tokPerSec: 100, samples: 2 }
       )
+      assert.equal(speed['opencode/oc-test-1/'].tokPerSec, 100)
       assert.deepEqual(
-        { model: agents['o-alpha'].model, tokens: agents['o-alpha'].contextTokens, window: agents['o-alpha'].contextWindow },
-        { model: 'oc-test-1', tokens: 21_200, window: 200_000 }
+        { model: agents['o-alpha'].model, effort: agents['o-alpha'].effort, tokens: agents['o-alpha'].contextTokens, window: agents['o-alpha'].contextWindow },
+        { model: 'oc-test-1', effort: 'high', tokens: 21_200, window: 200_000 }
       )
     } else {
       assert.match(result.sources.opencode.error, /node:sqlite/)
       assert.equal(agents['o-alpha'].model, null)
     }
     if (hasZstd) {
-      assert.equal(speed['dsh/dsh-test-1'].tokPerSec, 100)
+      assert.equal(speed['dsh/dsh-test-1/max'].tokPerSec, 100)
       assert.deepEqual(agents['dsh:/work/gamma'], {
         id: null,
         key: 'session-fixture',
@@ -443,6 +481,7 @@ test('collect: speeds per model and a context per live agent', async () => {
         cwd: '/work/gamma',
         state: 'idle',
         model: 'dsh-test-1',
+        effort: 'max',
         contextTokens: 43_000,
         contextWindow: 128_000,
         windowEstimated: false,

@@ -14,12 +14,6 @@
   "capabilities": [
     {
       "kind": "settings:own"
-    },
-    {
-      "kind": "workspace:read"
-    },
-    {
-      "kind": "workspace:write"
     }
   ],
   "contributes": {

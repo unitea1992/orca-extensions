@@ -235,9 +235,20 @@ export function median(values) {
   return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
 
+/**
+ * The reasoning effort a response ran with, as the agent logs it (`high`, `low`, …).
+ * The same model answers at a different speed per effort, so speeds are kept apart by
+ * it. Empty when the log names none; `default` is no choice and counts as none.
+ */
+export function cleanEffort(value) {
+  if (typeof value !== 'string') return ''
+  const effort = value.trim()
+  return effort === '' || effort === 'default' || effort.length > 24 ? '' : effort
+}
+
 /** One measured response: `tokens` generated over `ms`, finished at `at`. */
-function sample(agent, model, tokens, durationMs, at, estimated) {
-  return { agent, model: String(model || 'unknown'), tokens, ms: durationMs, at, estimated }
+function sample(agent, model, tokens, durationMs, at, estimated, effort = '') {
+  return { agent, model: String(model || 'unknown'), effort: cleanEffort(effort), tokens, ms: durationMs, at, estimated }
 }
 
 export function eligible(entry, since, now) {
@@ -250,15 +261,16 @@ export function eligible(entry, since, now) {
   )
 }
 
-/** Per agent kind and model: median and latest tokens per second. */
+/** Per agent kind, model and effort: median and latest tokens per second. */
 export function aggregate(samples, since, now) {
   const groups = new Map()
   for (const entry of samples) {
     if (!eligible(entry, since, now)) continue
-    const key = `${entry.agent}\u0000${entry.model}`
+    const effort = entry.effort ?? ''
+    const key = `${entry.agent}\u0000${entry.model}\u0000${effort}`
     let group = groups.get(key)
     if (!group) {
-      group = { agent: entry.agent, model: entry.model, rates: [], latest: null, estimated: false }
+      group = { agent: entry.agent, model: entry.model, effort, rates: [], latest: null, estimated: false }
       groups.set(key, group)
     }
     const rate = (entry.tokens * 1000) / entry.ms
@@ -269,6 +281,7 @@ export function aggregate(samples, since, now) {
   return [...groups.values()].map((group) => ({
     agent: group.agent,
     model: group.model,
+    effort: group.effort,
     tokPerSec: round1(median(group.rates)),
     latest: round1(group.latest.rate),
     lastAt: group.latest.at,
@@ -340,10 +353,12 @@ export function parseClaude(text) {
     if (typeof id !== 'string') continue
 
     const output = num(message.usage.output_tokens)
+    const effort = cleanEffort(record.effort)
     let entry = messages.get(id)
     if (!entry) {
       entry = {
         model,
+        effort,
         output,
         firstAt: at,
         lastAt: at,
@@ -354,6 +369,7 @@ export function parseClaude(text) {
     } else {
       entry.output = Math.max(entry.output, output)
       entry.lastAt = Math.max(entry.lastAt, at)
+      if (effort) entry.effort = effort
       if (at < entry.firstAt) {
         entry.firstAt = at
         entry.parent = record.parentUuid ?? null
@@ -365,7 +381,7 @@ export function parseClaude(text) {
         num(message.usage.input_tokens) +
         num(message.usage.cache_read_input_tokens) +
         num(message.usage.cache_creation_input_tokens)
-      if (tokens > 0 && (!context || at >= context.at)) context = { tokens, model, at }
+      if (tokens > 0 && (!context || at >= context.at)) context = { tokens, model, at, effort }
       if (tokens > (peaks.get(model) ?? 0)) peaks.set(model, tokens)
     }
   }
@@ -382,7 +398,7 @@ export function parseClaude(text) {
       startedAt = parent ? parent.at : null
     }
     if (startedAt === null) continue
-    samples.push(sample('claude', entry.model, entry.output, entry.lastAt - startedAt, entry.lastAt, true))
+    samples.push(sample('claude', entry.model, entry.output, entry.lastAt - startedAt, entry.lastAt, true, entry.effort))
   }
 
   if (context) {
@@ -529,7 +545,7 @@ export function isInternalCodexModel(model) {
  *  subagent, or Codex's automatic review) rather than an agent of its own, and the
  *  model of its first turn. */
 export function parseCodexHead(text) {
-  const head = { cwd: null, subagent: false, model: null }
+  const head = { cwd: null, subagent: false, model: null, effort: '' }
   for (const record of jsonLines(text)) {
     const payload = isRecord(record.payload) ? record.payload : {}
     if (record.type === 'session_meta') {
@@ -541,6 +557,7 @@ export function parseCodexHead(text) {
         (typeof payload.parent_thread_id === 'string' && payload.parent_thread_id !== '')
     } else if (record.type === 'turn_context' && typeof payload.model === 'string') {
       head.model = payload.model
+      head.effort = cleanEffort(payload.effort)
       break
     }
   }
@@ -568,6 +585,7 @@ const CODEX_OUTPUT_ITEMS = new Set([
  */
 export function parseCodex(text, head = {}) {
   let model = head.model ?? null
+  let effort = head.effort ?? ''
   let startedAt = null
   let endedAt = null
   let lastItemAt = null
@@ -582,7 +600,10 @@ export function parseCodex(text, head = {}) {
     const at = ms(record.timestamp)
     const payload = isRecord(record.payload) ? record.payload : {}
     if (record.type === 'turn_context') {
-      if (typeof payload.model === 'string') model = payload.model
+      if (typeof payload.model === 'string') {
+        model = payload.model
+        effort = cleanEffort(payload.effort)
+      }
       continue
     }
     if (record.type === 'token_usage_record') {
@@ -627,10 +648,10 @@ export function parseCodex(text, head = {}) {
       const tokens =
         num(last.output_tokens) +
         (info.last_usage_includes_reasoning === false ? num(last.reasoning_output_tokens) : 0)
-      samples.push(sample('codex', model, tokens, finishedAt - startedAt, finishedAt, true))
+      samples.push(sample('codex', model, tokens, finishedAt - startedAt, finishedAt, true, effort))
     }
     if (num(last.total_tokens) > 0 && at !== null) {
-      context = { tokens: num(last.total_tokens), model: model ?? 'unknown', at, window }
+      context = { tokens: num(last.total_tokens), model: model ?? 'unknown', at, window, effort }
     }
     startedAt = at === null ? outputAt : Math.max(at, outputAt ?? 0)
     endedAt = null
@@ -674,7 +695,9 @@ function collectCodex(run) {
         // The model is named once per turn, and a turn can be longer than the tail, so
         // a cut rollout takes its first turn's model from the head.
         if (tail.truncated && item.head.model === null) {
-          item.head.model = parseCodexHead(readHead(item.file, HEAD_LARGE_BYTES)).model
+          const first = parseCodexHead(readHead(item.file, HEAD_LARGE_BYTES))
+          item.head.model = first.model
+          item.head.effort = first.effort
         }
         result = parseCodex(tail.text, tail.truncated ? item.head : {})
         stats.files += 1
@@ -760,13 +783,14 @@ export function parsePi(text, windows = new Map()) {
     const at = ms(record.timestamp) ?? ms(message.timestamp)
     const model = typeof message.model === 'string' ? message.model : 'unknown'
     if (at === null) continue
+    const effort = cleanEffort(message.thinkingLevel)
     if (num(message.durationMs) > 0) {
-      samples.push(sample('pi', model, num(message.usage.output), message.durationMs, at, false))
+      samples.push(sample('pi', model, num(message.usage.output), message.durationMs, at, false, effort))
     }
     const tokens = num(message.usage.totalTokens)
     if (tokens > 0) {
       const window = windows.get(`${message.provider}/${model}`) ?? windows.get(model) ?? null
-      context = { tokens, model, at, window, windowEstimated: false }
+      context = { tokens, model, at, window, windowEstimated: false, effort }
     }
   }
   return { samples, context, cwd }
@@ -865,6 +889,8 @@ export function opencodeMessage(row, windows = new Map()) {
   const model = parseColumn(row.model)
   const cache = isRecord(tokens.cache) ? tokens.cache : {}
   const id = typeof model.id === 'string' ? model.id : 'unknown'
+  // OpenCode names the effort as the model's variant; `default` is none chosen.
+  const effort = cleanEffort(model.variant)
   const created = num(time.created)
   const finished = num(time.streamed) || num(time.completed)
   const generated = num(tokens.output) + num(tokens.reasoning)
@@ -872,7 +898,7 @@ export function opencodeMessage(row, windows = new Map()) {
   return {
     sample:
       created > 0 && finished > created
-        ? sample('opencode', id, generated, finished - created, finished, false)
+        ? sample('opencode', id, generated, finished - created, finished, false, effort)
         : null,
     context:
       used > 0
@@ -881,7 +907,8 @@ export function opencodeMessage(row, windows = new Map()) {
             model: id,
             at: finished || created,
             window: windows.get(`${model.providerID}/${id}`) ?? null,
-            windowEstimated: false
+            windowEstimated: false,
+            effort
           }
         : null
   }
@@ -1007,6 +1034,7 @@ export function parseDsh(text) {
   const header = { cwd: null, subagent: false }
   const samples = []
   let model = null
+  let effort = ''
   let window = null
   let requestAt = null
   let context = null
@@ -1023,6 +1051,8 @@ export function parseDsh(text) {
     const data = isRecord(record.data) ? record.data : {}
     if (record.type === 'step/start' || record.type === 'request/header') {
       requestAt = at
+      const config = isRecord(data.header) && isRecord(data.header.config) ? data.header.config : null
+      if (config) effort = cleanEffort(config.reasoningEffort)
     } else if (record.type === 'request/context') {
       requestAt = at
       if (typeof data.model === 'string') model = data.model
@@ -1032,17 +1062,17 @@ export function parseDsh(text) {
       if (!tokens) continue
       const endedAt = dshStreamEnd(data.stream) ?? at
       if (requestAt !== null && endedAt !== null) {
-        samples.push(sample('dsh', model, tokens.output + tokens.think, endedAt - requestAt, endedAt, false))
+        samples.push(sample('dsh', model, tokens.output + tokens.think, endedAt - requestAt, endedAt, false, effort))
       }
       const used = tokens.input + tokens.cacheRead + tokens.cacheWrite
       if (used > 0) {
-        context = { tokens: used, model: model ?? 'unknown', at: endedAt ?? at, window, windowEstimated: false }
+        context = { tokens: used, model: model ?? 'unknown', at: endedAt ?? at, window, windowEstimated: false, effort }
       }
       requestAt = null
     }
   }
   if (context && context.window === null) context.window = window
-  return { header, samples, context, model, window }
+  return { header, samples, context, model, window, effort }
 }
 
 function collectDsh(run) {
@@ -1089,6 +1119,7 @@ function collectDsh(run) {
       ...contextFields(result.context),
       // A session that has not answered yet still names its model and window.
       model: result.context?.model ?? result.model,
+      effort: result.context?.effort ?? result.effort,
       contextWindow: result.context?.window ?? result.window,
       sessionAt: item.mtime
     })
@@ -1102,6 +1133,7 @@ function collectDsh(run) {
 function contextFields(context) {
   return {
     model: context?.model ?? null,
+    effort: context?.effort ?? '',
     contextTokens: context?.tokens ?? null,
     contextWindow: context?.window ?? null,
     windowEstimated: Boolean(context?.windowEstimated)

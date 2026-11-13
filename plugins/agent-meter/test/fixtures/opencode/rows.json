@@ -36,7 +36,8 @@
         },
         "model": {
           "id": "oc-test-1",
-          "providerID": "ocprov"
+          "providerID": "ocprov",
+          "variant": "high"
         },
         "tokens": {
           "input": 500,
@@ -63,7 +64,8 @@
         },
         "model": {
           "id": "oc-test-1",
-          "providerID": "ocprov"
+          "providerID": "ocprov",
+          "variant": "high"
         },
         "tokens": {
           "input": 700,
@@ -88,7 +90,8 @@
         },
         "model": {
           "id": "oc-test-1",
-          "providerID": "ocprov"
+          "providerID": "ocprov",
+          "variant": "high"
         },
         "tokens": {
           "input": 0,
@@ -115,7 +118,8 @@
         },
         "model": {
           "id": "oc-test-1",
-          "providerID": "ocprov"
+          "providerID": "ocprov",
+          "variant": "default"
         },
         "tokens": {
           "input": 50,

@@ -30,7 +30,7 @@ function claudeUsage(output, input, cacheRead, cacheCreation) {
   }
 }
 
-function claudeAssistant({ uuid, parent, at, id, model = 'claude-test-1', usage, block = 'text', extra = {} }) {
+function claudeAssistant({ uuid, parent, at, id, model = 'claude-test-1', usage, block = 'text', effort = 'high', extra = {} }) {
   return {
     type: 'assistant',
     uuid,
@@ -38,6 +38,7 @@ function claudeAssistant({ uuid, parent, at, id, model = 'claude-test-1', usage,
     timestamp: iso(at),
     isSidechain: false,
     sessionId: 'sess-main',
+    ...(effort ? { effort } : {}),
     message: { id, model, role: 'assistant', content: [{ type: block }], stop_reason: 'end_turn', usage },
     ...extra
   }
@@ -106,15 +107,17 @@ write('claude/subagent.jsonl', [
     at: 62_000,
     id: 'msg_sub_1',
     model: 'claude-test-mini',
+    effort: null,
     usage: claudeUsage(300, 8, 9_000, 0),
     extra: { isSidechain: true }
   })
 ])
 
-// Past 200k: this account runs claude-test-1 with the wide window.
+// Past 200k: this account runs claude-test-1 with the wide window. Another effort than
+// the main session, so the same model shows a second speed.
 write('claude/wide.jsonl', [
   claudeUser('w1', null, 20_000),
-  claudeAssistant({ uuid: 'w2', parent: 'w1', at: 23_000, id: 'msg_w1', usage: claudeUsage(300, 20, 249_000, 980) })
+  claudeAssistant({ uuid: 'w2', parent: 'w1', at: 23_000, id: 'msg_w1', effort: 'medium', usage: claudeUsage(300, 20, 249_000, 980) })
 ])
 
 // --- Codex -----------------------------------------------------------------
@@ -129,7 +132,7 @@ const tokenCount = (at, total, last, extra = {}) =>
 
 write('codex/rollout-new.jsonl', [
   codex(0, 'session_meta', { id: 'thread-new', cwd: '/work/alpha', originator: 'fixture', source: 'cli', thread_source: 'user', base_instructions: 'x'.repeat(500) }),
-  codex(500, 'turn_context', { model: 'gpt-test-1', cwd: '/work/alpha' }),
+  codex(500, 'turn_context', { model: 'gpt-test-1', effort: 'high', cwd: '/work/alpha' }),
   codex(1000, 'event_msg', { type: 'task_started', model_context_window: 400_000 }),
   codex(3000, 'response_item', { type: 'reasoning' }),
   codex(5000, 'response_item', { type: 'function_call', name: 'fixture_tool' }),
@@ -173,7 +176,7 @@ write('codex/rollout-subagent.jsonl', [
 // A child thread marked only by its parent, running an ordinary model.
 write('codex/rollout-child.jsonl', [
   codex(50_000, 'session_meta', { id: 'thread-child', cwd: '/work/alpha', originator: 'fixture', source: 'cli', parent_thread_id: 'thread-new' }),
-  codex(50_100, 'turn_context', { model: 'gpt-test-1' }),
+  codex(50_100, 'turn_context', { model: 'gpt-test-1', effort: 'low' }),
   codex(50_200, 'event_msg', { type: 'task_started', model_context_window: 400_000 }),
   codex(52_200, 'response_item', { type: 'message', role: 'assistant' }),
   codex(52_200, 'token_usage_record', { response_id: 'resp-c' }),
@@ -195,7 +198,7 @@ const piAssistant = (id, at, durationMs, usage, extra = {}) => ({
   id,
   parentId: null,
   timestamp: iso(at),
-  message: { role: 'assistant', content: [], provider: 'testprov', model: 'local-test-1', usage, durationMs, stopReason: 'stop', ...extra }
+  message: { role: 'assistant', content: [], provider: 'testprov', model: 'local-test-1', usage, durationMs, stopReason: 'stop', thinkingLevel: 'high', ...extra }
 })
 
 write('pi/session.jsonl', [
@@ -216,14 +219,14 @@ writeFileSync(
 
 // --- OpenCode ----------------------------------------------------------------
 
-const ocMessage = (session, seq, at, durationMs, tokens) => ({
+const ocMessage = (session, seq, at, durationMs, tokens, variant = 'high') => ({
   session_id: session,
   type: 'assistant',
   seq,
   time_created: T0 + at,
   data: {
     time: durationMs === null ? { created: T0 + at } : { created: T0 + at, streamed: T0 + at + durationMs, completed: T0 + at + durationMs + 800 },
-    model: { id: 'oc-test-1', providerID: 'ocprov' },
+    model: { id: 'oc-test-1', providerID: 'ocprov', variant },
     tokens,
     content: []
   }
@@ -247,7 +250,8 @@ writeFileSync(
         ocMessage('ses_parent', 3, 8000, 2000, ocTokens(700, 300, 0, 20_500)),
         // Still streaming: no usage yet.
         ocMessage('ses_parent', 4, 12_000, null, ocTokens(0, 0, 0, 0)),
-        ocMessage('ses_child', 1, 25_000, 1000, ocTokens(50, 100, 0, 90_000))
+        // `default` is no variant chosen: no effort to show.
+        ocMessage('ses_child', 1, 25_000, 1000, ocTokens(50, 100, 0, 90_000), 'default')
       ]
     },
     null,
@@ -277,7 +281,7 @@ write('dsh/session.jsonl', [
   { type: 'session', version: 4, id: 'dsh-session', createdAt: T0, cwd: '/work/gamma', isSeeded: false, delegationDepth: 0 },
   dsh(1, 0, 'turn/start', { turn: 0 }),
   dsh(2, 0, 'step/start', { turn: 0, step: 0 }),
-  dsh(3, 50, 'request/header', { header: { config: { provider: 'dshprov', model: 'dsh-test-1' } }, reason: 'fixture' }),
+  dsh(3, 50, 'request/header', { header: { config: { provider: 'dshprov', model: 'dsh-test-1', reasoningEffort: 'max' } }, reason: 'fixture' }),
   dsh(4, 100, 'request/context', { provider: 'dshprov', model: 'dsh-test-1', contextWindow: 128_000 }),
   // An abandoned attempt: a stream but no usage.
   dsh(5, 300, 'assistant/attempt', { turn: 0, step: 0, stream: [{ type: 'chunk', time: T0 + 300, chunk: { type: 'error' } }] }),
@@ -314,11 +318,6 @@ writeFileSync(
       worktrees: [
         {
           path: '/work/alpha',
-          worktreeId: 'repo-1::/work/alpha',
-          worktreeInstanceId: 'instance-alpha-0001',
-          identity: { key: 'wt2:local:instance-alpha-0001', executionHostId: 'local', instanceId: 'instance-alpha-0001' },
-          hostId: 'local',
-          environment: { id: 'env-1', name: 'my server' },
           repo: 'alpha-repo',
           displayName: 'alpha',
           agents: [
@@ -330,7 +329,9 @@ writeFileSync(
         { path: '/work/beta', displayName: '', agents: [{ paneKey: 'tab-2:leaf-2', agentType: 'pi', state: 'idle', updatedAt: T0 }] },
         {
           // Three agents in one workspace: one titled by Orca, one by its terminal, one untitled.
+          // A repository's main checkout: the folder is the repository, the workspace `develop`.
           path: '/work/delta',
+          repo: 'delta',
           displayName: 'develop',
           agents: [
             { paneKey: 'tab-5:leaf-b', agentType: 'claude', state: 'done', displayName: null, taskTitle: null, updatedAt: T0 },
@@ -340,7 +341,6 @@ writeFileSync(
         },
         { path: '/work/empty', displayName: 'empty', agents: [] }
       ],
-      _meta: { runtimeId: 'runtime-1' },
       totalCount: 4,
       truncated: false
     },
@@ -353,8 +353,7 @@ writeFileSync(
   `${JSON.stringify(
     {
       terminals: [
-        { handle: 'term_one', tabId: 'tab-1', leafId: 'leaf-1', worktreePath: '/work/alpha' },
-        { handle: 'term two', tabId: 'tab-2', leafId: 'leaf-2', worktreePath: '/work/beta' },
+        { handle: 'term_one', tabId: 'tab-1', leafId: 'leaf-1', title: null, worktreePath: '/work/alpha' },
         { handle: 'term_three', tabId: 'tab-6', leafId: 'leaf-a', title: 'codex: review', worktreePath: '/work/delta' }
       ]
     },

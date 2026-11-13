@@ -16,19 +16,17 @@ import {
   checkTarget,
   childEnv,
   describeRun,
-  describeWorkspaceMiss,
   filledEnv,
   flattenAgents,
   isConsentError,
   labelAgents,
+  modelLabel,
   parseReaderOutput,
   pickEnvironment,
-  pickWorkspace,
   readerError,
   readerPayload,
   resolveSsh,
   tailLines,
-  terminalHandles,
   terminalTitles
 } from '../worker/main.mjs'
 
@@ -399,38 +397,28 @@ test('environment: a name the CLI cannot take falls back to its id', () => {
   )
 })
 
-test('worktree ps: known agent kinds with their workspace and title', () => {
+test('worktree ps: known agent kinds, named repository · workspace', () => {
   assert.deepEqual(
     flattenAgents(fixture('worktree-ps.json')).map(({ id, type, state, cwd, name, title }) => ({ id, type, state, cwd, name, title })),
     [
-      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', name: 'alpha', title: '' },
-      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', name: 'alpha', title: '' },
+      { id: 'tab-1:leaf-1', type: 'claude', state: 'working', cwd: '/work/alpha', name: 'alpha-repo · alpha', title: '' },
+      { id: 'structured-agent-session-1:pane-1', type: 'codex', state: 'done', cwd: '/work/alpha', name: 'alpha-repo · alpha', title: '' },
+      // Orca names no repository here: the workspace alone.
       { id: 'tab-2:leaf-2', type: 'pi', state: 'idle', cwd: '/work/beta', name: 'beta', title: '' },
-      { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', name: 'develop', title: '' },
+      // A repository's main checkout: the folder says the repository, the name the workspace.
+      { id: 'tab-5:leaf-b', type: 'claude', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: '' },
       // Whitespace in a title is flattened to one line.
-      { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', name: 'develop', title: 'Fix login flow' },
-      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', name: 'develop', title: '' }
+      { id: 'tab-5:leaf-a', type: 'claude', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: 'Fix login flow' },
+      { id: 'tab-6:leaf-a', type: 'codex', state: 'done', cwd: '/work/delta', name: 'delta · develop', title: '' }
     ]
   )
   assert.deepEqual(flattenAgents({}), [])
-  // Everything the server calls the worktree and its host goes along, for a click.
-  const [alpha, , beta] = flattenAgents(fixture('worktree-ps.json'))
-  assert.deepEqual(
-    { keys: alpha.keys, hosts: alpha.hosts, repo: alpha.repo },
-    {
-      keys: ['repo-1::/work/alpha', 'wt2:local:instance-alpha-0001', 'instance-alpha-0001'],
-      hosts: ['env-1', 'my server', 'local', 'runtime-1'],
-      repo: 'alpha-repo'
-    }
-  )
-  assert.deepEqual({ keys: beta.keys, hosts: beta.hosts, repo: beta.repo }, { keys: [], hosts: ['runtime-1'], repo: '' })
+  // The repository is not said twice when the workspace has its name.
+  const same = flattenAgents({ worktrees: [{ path: '/work/solo', repo: 'solo', displayName: 'solo', agents: [{ paneKey: 'p', agentType: 'pi' }] }] })
+  assert.equal(same[0].name, 'solo')
 })
 
-test('terminal list: pane key to handle and title, unsafe handles dropped', () => {
-  assert.deepEqual([...terminalHandles(fixture('terminal-list.json'))], [
-    ['tab-1:leaf-1', 'term_one'],
-    ['tab-6:leaf-a', 'term_three']
-  ])
+test('terminal list: pane key to title, where one is set', () => {
   assert.deepEqual([...terminalTitles(fixture('terminal-list.json'))], [['tab-6:leaf-a', 'codex: review']])
 })
 
@@ -463,168 +451,74 @@ test('labels: agents sharing a workspace get a title or a number, others none', 
 const READER = {
   ok: true,
   models: [
-    { agent: 'codex', model: 'gpt-test-1', tokPerSec: 40, latest: 44, samples: 12, estimated: true },
-    { agent: 'claude', model: 'claude-test-1', tokPerSec: 82.4, latest: 90, samples: 30, estimated: true },
-    { agent: 'pi', model: 'local-test-1', tokPerSec: 120, latest: 110, samples: 4, estimated: false }
+    { agent: 'codex', model: 'gpt-6-test', effort: 'high', tokPerSec: 40, latest: 44, samples: 12, estimated: true },
+    { agent: 'claude', model: 'claude-test-5-2', effort: 'high', tokPerSec: 82.4, latest: 90, samples: 30, estimated: true },
+    { agent: 'claude', model: 'claude-test-5-2', effort: 'medium', tokPerSec: 110, latest: 100, samples: 9, estimated: true },
+    { agent: 'pi', model: 'local-test-1', effort: '', tokPerSec: 120, latest: 110, samples: 4, estimated: false }
   ],
   agents: [
-    { id: 'tab-1:leaf-1', agent: 'claude', cwd: '/work/alpha', state: 'working', model: 'claude-test-1', contextTokens: 146_000, contextWindow: 200_000, windowEstimated: true },
-    { id: 'c2', agent: 'claude', cwd: '/work/beta', state: 'done', model: 'claude-test-1', contextTokens: 180_000, contextWindow: 1_000_000, windowEstimated: true },
-    { id: 'structured-agent-session-1:pane-1', agent: 'codex', cwd: '/work/alpha', state: 'done', model: 'gpt-test-1', contextTokens: 50_000, contextWindow: 400_000, windowEstimated: false },
-    { id: 'c3', agent: 'claude', cwd: '/work/none', state: 'done', model: null, contextTokens: null, contextWindow: null, windowEstimated: false },
-    { id: 'tab-5:leaf-b', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-1', contextTokens: 24_000, contextWindow: 200_000, windowEstimated: true },
-    { id: 'tab-5:leaf-a', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-1', contextTokens: 20_000, contextWindow: 200_000, windowEstimated: true },
-    { id: 'tab-6:leaf-a', agent: 'codex', cwd: '/work/delta', state: 'done', model: 'gpt-test-1', contextTokens: 20_000, contextWindow: 400_000, windowEstimated: false },
-    { id: null, key: 'session-b', agent: 'dsh', cwd: '/work/gamma', state: 'working', model: 'dsh-test-1', contextTokens: 9000, contextWindow: null, windowEstimated: false }
+    { id: 'tab-1:leaf-1', agent: 'claude', cwd: '/work/alpha', state: 'working', model: 'claude-test-5-2', effort: 'high', contextTokens: 146_000, contextWindow: 200_000, windowEstimated: true },
+    { id: 'c2', agent: 'claude', cwd: '/work/beta', state: 'done', model: 'claude-test-5-2', effort: 'high', contextTokens: 180_000, contextWindow: 1_000_000, windowEstimated: true },
+    { id: 'structured-agent-session-1:pane-1', agent: 'codex', cwd: '/work/alpha', state: 'done', model: 'gpt-6-test', effort: 'high', contextTokens: 50_000, contextWindow: 400_000, windowEstimated: false },
+    { id: 'c3', agent: 'claude', cwd: '/work/none', state: 'done', model: null, effort: '', contextTokens: null, contextWindow: null, windowEstimated: false },
+    { id: 'tab-5:leaf-b', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-5-2', effort: 'medium', contextTokens: 24_000, contextWindow: 200_000, windowEstimated: true },
+    { id: 'tab-5:leaf-a', agent: 'claude', cwd: '/work/delta', state: 'done', model: 'claude-test-5-2', effort: 'high', contextTokens: 20_000, contextWindow: 200_000, windowEstimated: true },
+    // An effort no response was measured at in the period: a group of its own, no speed.
+    { id: 'tab-6:leaf-a', agent: 'codex', cwd: '/work/delta', state: 'done', model: 'gpt-6-test', effort: 'low', contextTokens: 20_000, contextWindow: 400_000, windowEstimated: false },
+    { id: null, key: 'session-b', agent: 'dsh', cwd: '/work/gamma', state: 'working', model: 'dsh-test-1', effort: '', contextTokens: 9000, contextWindow: null, windowEstimated: false }
   ]
 }
 
-function snapshotOf(reader, overrides = {}) {
+function groupsOf(reader) {
   const titles = terminalTitles(fixture('terminal-list.json'))
-  const agents = labelAgents(flattenAgents(fixture('worktree-ps.json')), titles)
-  return {
-    configured: true,
-    label: 'user@host',
-    period: '1h',
-    refreshSeconds: 15,
-    fetchedAt: 1,
-    error: null,
-    notice: null,
-    consentRequired: false,
-    groups: buildGroups(reader, agents),
-    ...overrides
-  }
+  return buildGroups(reader, labelAgents(flattenAgents(fixture('worktree-ps.json')), titles))
 }
 
-test('groups: per model, kinds in a fixed order, agents under their model', () => {
-  const groups = snapshotOf(READER).groups
+test('model names: known shapes are written out, the rest stay ids', () => {
+  assert.equal(modelLabel('claude-fable-5-2'), 'Claude Fable 5.2')
+  assert.equal(modelLabel('claude-opus-5-5'), 'Claude Opus 5.5')
+  assert.equal(modelLabel('claude-opus-4'), 'Claude Opus 4')
+  assert.equal(modelLabel('claude-sonnet-4-5-20250929'), 'Claude Sonnet 4.5')
+  assert.equal(modelLabel('claude-3-5-sonnet-20241022'), 'Claude 3.5 Sonnet')
+  // A bracketed suffix is kept.
+  assert.equal(modelLabel('claude-fable-5-2[1m]'), 'Claude Fable 5.2 (1M)')
+  assert.equal(modelLabel('gpt-6-test'), 'GPT-6 Test')
+  assert.equal(modelLabel('gpt-5.1-codex-max'), 'GPT-5.1 Codex Max')
+  assert.equal(modelLabel('gpt-6'), 'GPT-6')
+  // Shapes nobody told us about are shown as they are.
+  for (const id of ['local-test-1', 'DeepThought-V9-Flash-0101', 'o9-mini', 'claude-next', 'provider/model:tag', '']) {
+    assert.equal(modelLabel(id), id)
+  }
+  assert.equal(modelLabel('local-test-1[beta]'), 'local-test-1[beta]')
+})
+
+test('groups: per model and effort, kinds in a fixed order, agents under theirs', () => {
+  const groups = groupsOf(READER)
   assert.deepEqual(
-    groups.map((group) => [group.agent, group.model, group.tokPerSec, group.rows.map((row) => [row.name, row.sub])]),
+    groups.map((group) => [group.agent, group.label, group.effort, group.tokPerSec, group.rows.map((row) => [row.name, row.sub])]),
     [
-      // The three agents of `develop` stay apart: by title where there is one, else by number.
-      ['claude', 'claude-test-1', 82.4, [['alpha', '#2'], ['beta', ''], ['develop', '#2'], ['develop', 'Fix login flow']]],
-      ['claude', null, null, [['none', '']]],
-      ['codex', 'gpt-test-1', 40, [['alpha', '#1'], ['develop', 'codex: review']]],
-      ['pi', 'local-test-1', 120, []],
-      ['dsh', 'dsh-test-1', null, [['gamma', '']]]
+      // One model at two efforts: two groups, each with its own speed and its own agents.
+      ['claude', 'Claude Test 5.2', 'high', 82.4, [['alpha-repo · alpha', '#2'], ['beta', ''], ['delta · develop', 'Fix login flow']]],
+      ['claude', 'Claude Test 5.2', 'medium', 110, [['delta · develop', '#2']]],
+      ['claude', null, '', null, [['none', '']]],
+      ['codex', 'GPT-6 Test', 'high', 40, [['alpha-repo · alpha', '#1']]],
+      ['codex', 'GPT-6 Test', 'low', null, [['delta · develop', 'codex: review']]],
+      ['pi', 'local-test-1', '', 120, []],
+      ['dsh', 'dsh-test-1', '', null, [['gamma', '']]]
     ]
   )
+  // The id stays next to the name, for the tooltip.
+  assert.equal(groups[0].model, 'claude-test-5-2')
   const [alpha, beta] = groups[0].rows
   assert.deepEqual(
     { working: alpha.working, percent: alpha.percent, estimated: alpha.windowEstimated },
     { working: true, percent: 73, estimated: true }
   )
   assert.deepEqual({ working: beta.working, percent: beta.percent }, { working: false, percent: 18 })
-  // Every row says where its workspace is, so every row can be opened: a listed agent by
-  // what the server calls its worktree, a session Orca does not list by its directory.
-  assert.deepEqual(
-    { path: alpha.path, keys: alpha.keys, hosts: alpha.hosts, repo: alpha.repo },
-    {
-      path: '/work/alpha',
-      keys: ['repo-1::/work/alpha', 'wt2:local:instance-alpha-0001', 'instance-alpha-0001'],
-      hosts: ['env-1', 'my server', 'local', 'runtime-1'],
-      repo: 'alpha-repo'
-    }
-  )
-  assert.deepEqual({ path: beta.path, keys: beta.keys }, { path: '/work/beta', keys: [] })
-  assert.deepEqual({ path: groups[4].rows[0].path, keys: groups[4].rows[0].keys, hosts: groups[4].rows[0].hosts }, { path: '/work/gamma', keys: [], hosts: [] })
   // No window known: tokens only.
-  assert.deepEqual({ tokens: groups[4].rows[0].tokens, percent: groups[4].rows[0].percent }, { tokens: 9000, percent: null })
-  assert.equal(groups.flatMap((group) => group.rows).some((row) => 'unlisted' in row), false)
-})
-
-const WS = {
-  local: { id: 'ws-local', kind: 'worktree', name: 'alpha', project: 'alpha-repo', path: '/work/alpha', branch: 'main', hostId: null },
-  remote: { id: 'ws-remote', kind: 'worktree', name: 'alpha', project: 'alpha-repo', path: '/work/alpha', branch: 'main', hostId: 'env-1' },
-  other: { id: 'ws-other', kind: 'worktree', name: 'alpha', project: 'alpha-repo', path: '/work/alpha', branch: 'main', hostId: 'env-2' }
-}
-const picked = (workspaces, row, hosts) => {
-  const found = pickWorkspace(workspaces, row, hosts)
-  if (!found) return null
-  return found.entry ? [found.how, found.entry.id] : [found.how, null, found.count]
-}
-
-test('workspace: found by the server id, a part of it, the path, or the name', () => {
-  const row = {
-    name: 'alpha',
-    path: '/work/alpha',
-    repo: 'alpha-repo',
-    keys: ['repo-1::/work/alpha', 'wt2:local:instance-alpha-0001', 'instance-alpha-0001'],
-    hosts: ['env-1', 'my server']
-  }
-  // 1. The desktop uses one of the server's own ids, whatever else differs.
-  const sameId = { id: 'repo-1::/work/alpha', kind: 'worktree', name: 'x', path: '/elsewhere', branch: null, hostId: 'env-9' }
-  assert.deepEqual(picked([WS.local, WS.remote, sameId], row), ['id', 'repo-1::/work/alpha'])
-  // 2. The desktop wraps the server's id in its own, or keeps only its `::<path>` tail.
-  const wrapped = { id: 'env-1/wt2:local:instance-alpha-0001', kind: 'worktree', name: 'x', path: '', branch: null, hostId: 'env-1' }
-  assert.deepEqual(picked([WS.local, wrapped], row), ['id-part', 'env-1/wt2:local:instance-alpha-0001'])
-  const tail = { id: 'other-repo-id::/work/alpha', kind: 'worktree', name: 'x', path: '', branch: null, hostId: 'env-1' }
-  assert.deepEqual(picked([tail], { ...row, keys: [] }), ['id-part', 'other-repo-id::/work/alpha'])
-  // A short key such as a host name inside an id proves nothing.
-  assert.equal(picked([{ id: 'env-1/local/zzz', kind: 'worktree', name: 'x', path: '', branch: null, hostId: null }], { ...row, name: 'y', keys: ['local'] }), null)
-  // 3. The path: either separator, with or without a trailing one, case kept.
-  assert.deepEqual(picked([WS.local], { ...row, keys: [] }), ['path', 'ws-local'])
-  assert.deepEqual(picked([{ ...WS.local, path: '/work/alpha/' }], { path: '/work/alpha' }), ['path', 'ws-local'])
-  assert.deepEqual(picked([{ ...WS.local, path: 'C:\\work\\alpha\\' }], { path: 'C:/work/alpha' }), ['path', 'ws-local'])
-  assert.equal(picked([{ ...WS.local, name: 'other', path: '/work/Alpha' }], { path: '/work/alpha' }), null)
-  // A repository's main checkout listed as another kind is a workspace all the same.
-  assert.deepEqual(picked([{ ...WS.remote, kind: 'folder' }], { path: '/work/alpha' }), ['path', 'ws-remote'])
-  // 4. The path differs (the desktop shows it another way): the same name in the same
-  //    folder or project is the last resort.
-  const moved = { id: 'ws-moved', kind: 'worktree', name: 'alpha', project: 'alpha-repo', path: '/mnt/server/work/alpha', branch: 'main', hostId: 'env-1' }
-  assert.deepEqual(picked([moved], { ...row, keys: [] }), ['name', 'ws-moved'])
-  assert.deepEqual(picked([{ ...moved, path: '/mnt/x' }], { ...row, keys: [] }), ['name', 'ws-moved'])
-  assert.equal(picked([{ ...moved, path: '/mnt/x', project: 'unrelated' }], { ...row, keys: [] }), null)
-  // 5. Nothing but the folder name agrees: opened when that leaves exactly one.
-  assert.deepEqual(picked([{ ...moved, name: 'beta' }], { ...row, keys: [] }), ['folder', 'ws-moved'])
-  assert.deepEqual(picked([{ ...moved, name: 'beta', path: '', id: 'remote:/srv/x/alpha' }], { ...row, keys: [] }), ['folder', 'remote:/srv/x/alpha'])
-  const twin = { ...moved, id: 'ws-twin', name: 'gamma', path: '/elsewhere/alpha', hostId: 'env-2' }
-  // On the paired server only one has it.
-  assert.deepEqual(picked([{ ...moved, name: 'beta' }, twin], { ...row, keys: [] }), ['folder', 'ws-moved'])
-  // Several, and no way to choose: none is opened, and the count is given.
-  assert.deepEqual(picked([{ ...moved, name: 'beta' }, twin], { ...row, keys: [], hosts: [] }), ['folder', null, 2])
-  assert.deepEqual(picked([{ ...moved, name: 'beta' }, { ...twin, hostId: 'env-1' }], { ...row, keys: [] }), ['folder', null, 2])
-  assert.equal(picked([{ ...moved, name: 'beta', path: '/mnt/alpha-two' }], { ...row, keys: [] }), null)
-})
-
-test('workspace: the same path on several hosts goes to the paired server', () => {
-  const all = [WS.local, WS.other, WS.remote]
-  // The host as the server names itself, or as this desktop names the pairing.
-  assert.deepEqual(picked(all, { path: '/work/alpha', hosts: ['env-1'] }), ['path', 'ws-remote'])
-  assert.deepEqual(picked(all, { path: '/work/alpha', hosts: ['local'] }, ['my server', 'env-2']), ['path', 'ws-other'])
-  // No name matches: a remote one before the local copy.
-  assert.deepEqual(picked(all, { path: '/work/alpha', hosts: ['runtime-9'] }), ['path', 'ws-other'])
-  assert.deepEqual(picked([WS.local], { path: '/work/alpha', hosts: ['env-1'] }), ['path', 'ws-local'])
-  // Nothing to open.
-  assert.equal(picked([WS.local, WS.remote], { path: '/work/none' }), null)
-  assert.equal(picked([WS.local], { path: '' }), null)
-  assert.equal(picked(undefined, { path: '/work/alpha' }), null)
-})
-
-test('workspace: a miss is logged with what was looked for and what came closest', () => {
-  const row = { name: 'develop', path: '/work/alpha-repo', repo: 'alpha-repo', keys: ['repo-1::/work/alpha-repo'], hosts: ['env-1'] }
-  const listed = {
-    truncated: true,
-    workspaces: [
-      { id: 'w1', kind: 'folder', name: 'main', project: 'alpha-repo', path: '/srv/checkouts/alpha-repo.git', branch: 'main', hostId: 'env-1' },
-      { id: 'w2', kind: 'worktree', name: 'feature', project: 'other', path: '/work/other', branch: 'f', hostId: null },
-      { id: 'w3', kind: 'worktree', name: 'develop', project: 'another', path: '/work/another', branch: 'develop', hostId: 'env-2' }
-    ]
-  }
-  assert.equal(pickWorkspace(listed.workspaces, row), null)
-  assert.deepEqual(describeWorkspaceMiss(listed, row, ['my server']), [
-    'open: ワークスペースが見つかりません workspace.list=3件 truncated=true hostId別={"env-1":1,"null":1,"env-2":1}',
-    'open: 探したキー name="develop" path="/work/alpha-repo" repo="alpha-repo" keys=["repo-1::/work/alpha-repo"] hosts=["env-1","my server"]',
-    'open: 近い候補 2件（2件を表示）',
-    'open:   id="w1" kind=folder hostId="env-1" name="main" project="alpha-repo" branch="main" path="/srv/checkouts/alpha-repo.git"',
-    'open:   id="w3" kind=worktree hostId="env-2" name="develop" project="another" branch="develop" path="/work/another"'
-  ])
-  // Nothing close: the first entries, so the shape of the list can be seen.
-  const far = describeWorkspaceMiss(listed, { name: 'zzz', path: '/nowhere/zzz', keys: [], hosts: [] })
-  assert.equal(far[2], 'open: 近い候補なし。先頭（3件を表示）')
-  assert.equal(far.length, 6)
-  assert.equal(describeWorkspaceMiss({ workspaces: Array.from({ length: 40 }, (_, index) => ({ id: `w${index}`, path: `/p/${index}` })) }, { path: '/q' }).length, 13)
-  assert.equal(describeWorkspaceMiss(undefined, { path: '/q' })[0], 'open: ワークスペースが見つかりません workspace.list=0件 truncated=false hostId別={}')
+  assert.deepEqual({ tokens: groups[6].rows[0].tokens, percent: groups[6].rows[0].percent }, { tokens: 9000, percent: null })
+  // A row holds what is shown and nothing to act on: rows cannot be pressed.
+  assert.deepEqual(Object.keys(alpha).sort(), ['id', 'name', 'percent', 'state', 'sub', 'tokens', 'window', 'windowEstimated', 'working'])
 })
 
 test('groups: sessions Orca does not list are numbered by their own key', () => {
@@ -661,6 +555,5 @@ test('manifest: settings match the worker defaults and hold no real host', () =>
   // The panel is all there is: nothing in the status bar, so nothing that keeps the
   // worker running while no panel is open.
   assert.deepEqual(Object.keys(manifest.contributes).sort(), ['panels', 'settings'])
-  // Settings, and finding and showing a workspace when a row is pressed.
-  assert.deepEqual(manifest.capabilities, [{ kind: 'settings:own' }, { kind: 'workspace:read' }, { kind: 'workspace:write' }])
+  assert.deepEqual(manifest.capabilities, [{ kind: 'settings:own' }])
 })
