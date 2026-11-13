@@ -701,7 +701,8 @@ const VENDOR_NAMES = {
   openai: 'OpenAI',
   phi: 'Phi',
   qwen: 'Qwen',
-  qwq: 'QwQ'
+  qwq: 'QwQ',
+  sensenova: 'SenseNova'
 }
 
 /** One word of a model id as it is written in a name. */

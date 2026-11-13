@@ -1030,9 +1030,10 @@ async function collectOpencode(run) {
  *  - the short names dsh-tui's projection reads (`input`, `output`, `think` or `reasoning`,
  *    `cacheRead`, `cacheWrite`), where the parts add up;
  *  - the `*Tokens` names a real DSH 0.2 log carries (`inputTokens`, `outputTokens`,
- *    `totalTokens`, optionally `reasoningTokens` and cache counts). Here `inputTokens` is
- *    the whole prompt and `reasoningTokens` is part of `outputTokens`, as in the AI SDK
- *    usage these logs mirror, so neither is added on top. */
+ *    `totalTokens`, and `cacheReadTokens` / `cacheWriteTokens` when the provider caches).
+ *    `inputTokens` is the uncached part only (real logs: totalTokens = input + output +
+ *    cacheRead), so the cache counts add to the context. `reasoningTokens`, when present,
+ *    is part of `outputTokens` and is not added on top. */
 export function dshTokens(usage) {
   if (!isRecord(usage)) return null
   if ('inputTokens' in usage || 'outputTokens' in usage) {
@@ -1040,10 +1041,10 @@ export function dshTokens(usage) {
       input: num(usage.inputTokens),
       output: num(usage.outputTokens),
       think: 0,
-      cacheRead: 0,
-      cacheWrite: 0
+      cacheRead: num(usage.cacheReadTokens),
+      cacheWrite: num(usage.cacheWriteTokens)
     }
-    return tokens.input + tokens.output > 0 ? tokens : null
+    return tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite > 0 ? tokens : null
   }
   const tokens = {
     input: num(usage.input),
@@ -1105,6 +1106,15 @@ export function parseDsh(text) {
       requestAt = at
       const config = isRecord(data.header) && isRecord(data.header.config) ? data.header.config : null
       if (config) effort = cleanEffort(config.reasoningEffort)
+    } else if (record.type === 'model/selection') {
+      // `/model` in dsh-tui: the next requests run on this route, often before any new
+      // request/header names it. The window comes with the next request/context.
+      if (typeof data.model === 'string' && data.model !== model) {
+        model = data.model
+        window = null
+        effort = ''
+      }
+      if (typeof data.reasoningEffort === 'string') effort = cleanEffort(data.reasoningEffort)
     } else if (record.type === 'request/context') {
       requestAt = at
       if (typeof data.model === 'string') model = data.model
@@ -1133,8 +1143,9 @@ function collectDsh(run) {
   for (const cwdDir of listDir(root)) {
     if (!isDirEntry(root, cwdDir)) continue
     const dir = path.join(root, cwdDir.name)
+    // The session folder is `session-<uuid>` for headless runs and a bare `<uuid>` for
+    // dsh-tui; the log file inside is what makes it a session.
     for (const session of listDir(dir)) {
-      if (!session.name.startsWith('session-')) continue
       const file = path.join(dir, session.name, 'session.v4.jsonl.zstd')
       const stat = statOrNull(file)
       if (stat && stat.isFile() && stat.mtimeMs >= run.since) {
