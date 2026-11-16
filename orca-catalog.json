@@ -108,6 +108,27 @@
       ],
       "releases": [
         {
+          "version": "0.1.4",
+          "commit": "b1404e6dca83f82c360c11594c7b572d2d32079d",
+          "contentHash": "59c0ab6ee41622a46ee468fd3637ce43ea2842ad997e42318793d205418f50fa",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.248",
+          "name": "Agent Meter",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "パフォーマンス"
+            }
+          ],
+          "capabilities": [
+            "settings:own"
+          ],
+          "license": "MIT",
+          "repository": "https://github.com/unitea1992/orca-extensions",
+          "updatedAt": "2026-11-16",
+          "changelog": "期間内に速度が測れたモデルは、稼働中のエージェントがいなくてもパフォーマンス一覧に見出しと tok/s を出すようにした。OpenCode のチャットセッションは Orca のエージェント一覧に出ないため、DeepSeek 以外のモデルが消えていた。"
+        },
+        {
           "version": "0.1.3",
           "commit": "c1c39ea9dc1cb66c8297b12335af1caa997c29c3",
           "contentHash": "036a155c0aa35fb3c8b05eb3bc9dff127d71c5058588a11efbbe7575bb02bfea",
