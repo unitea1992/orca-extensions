@@ -756,9 +756,9 @@ export function modelName(names, agent, id) {
 
 /**
  * Reader result + Orca's agent list → groups per model and effort with their live
- * agents. One model at two efforts is two groups: each has its own speed. A model that
- * no live agent runs is left out: its speed alone, with nobody under it, is a heading
- * for nothing.
+ * agents. One model at two efforts is two groups: each has its own speed. A model with
+ * a measured speed keeps its heading even when no live Orca agent runs it: OpenCode
+ * chat sessions are not Orca agents, yet their output is activity worth showing.
  */
 export function buildGroups(reader, agents = []) {
   const live = new Map(agents.map((agent) => [agent.id, agent]))
@@ -827,7 +827,7 @@ export function buildGroups(reader, agents = []) {
     )
   }
   return list
-    .filter((group) => group.rows.length > 0)
+    .filter((group) => group.rows.length > 0 || group.tokPerSec !== null)
     .sort(
       (left, right) =>
         order(left.agent) - order(right.agent) ||

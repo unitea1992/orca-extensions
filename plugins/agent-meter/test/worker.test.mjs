@@ -552,7 +552,8 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
       ['codex', 'GPT-6 Test', 'high', 40, [['alpha-repo', 'alpha', '#1']]],
       // An agent whose effort had no measured response in the period still has its heading.
       ['codex', 'GPT-6 Test', 'low', null, [['delta', 'develop', 'codex: review']]],
-      // pi's model has a speed but no live agent runs it: no heading for it.
+      // pi's model has a speed but no live agent runs it: its heading still shows, without rows.
+      ['pi', 'Local Test 1', '', 120, []],
       // DSH is named from Orca's list like the others: repository and workspace.
       ['dsh', 'Dsh Test 1', '', null, [['gamma-repo', 'gamma', '']]]
     ]
@@ -576,13 +577,25 @@ test('groups: per model and effort, kinds in a fixed order, agents under theirs'
   )
   assert.deepEqual({ working: beta.working, percent: beta.percent }, { working: false, percent: 18 })
   // No window known: tokens only.
-  assert.deepEqual({ tokens: groups[5].rows[0].tokens, percent: groups[5].rows[0].percent }, { tokens: 9000, percent: null })
+  assert.deepEqual({ tokens: groups[6].rows[0].tokens, percent: groups[6].rows[0].percent }, { tokens: 9000, percent: null })
   // A row holds what is shown and nothing to act on: rows cannot be pressed.
   assert.deepEqual(Object.keys(alpha).sort(), ['id', 'name', 'percent', 'repo', 'state', 'sub', 'tokens', 'window', 'windowEstimated', 'working'])
 })
 
-test('groups: speeds alone, with no live agent, show nothing', () => {
-  assert.deepEqual(buildGroups({ models: READER.models, agents: [] }), [])
+test('groups: a speed with no live agent keeps its heading, with no rows', () => {
+  const groups = buildGroups({ models: READER.models, agents: [] })
+  // Every model measured in the period gets a heading. None has a live agent row: an
+  // OpenCode chat session is not an Orca agent, but its output is still activity.
+  assert.deepEqual(
+    groups.map((group) => [group.agent, group.model, group.tokPerSec, group.rows.length]),
+    [
+      ['claude', 'claude-test-5-2', 82.4, 0],
+      ['claude', 'claude-test-5-2', 110, 0],
+      ['codex', 'gpt-6-test', 40, 0],
+      ['pi', 'local-test-1', 120, 0]
+    ]
+  )
+  // Nothing measured at all still shows nothing.
   assert.deepEqual(buildGroups({}), [])
 })
 
@@ -594,8 +607,15 @@ test('groups: a session Orca does not list is no row, and a listed DSH agent kee
     groups.map((group) => group.rows.map((row) => [row.repo, row.name, row.state, row.working, row.percent])),
     [[['gamma-repo', 'gamma', 'working', true, 50]]]
   )
-  // The reader gives no row for a session that is not listed; speeds alone show nothing.
-  assert.deepEqual(buildGroups({ models: [{ agent: 'dsh', model: 'dsh-test-1', effort: '', tokPerSec: 100, latest: 100, samples: 2 }], agents: [] }, listed), [])
+  // The reader gives no row for a session that is not listed; the speed's heading stays.
+  const [speedOnly] = buildGroups(
+    { models: [{ agent: 'dsh', model: 'dsh-test-1', effort: '', tokPerSec: 100, latest: 100, samples: 2 }], agents: [] },
+    listed
+  )
+  assert.deepEqual(
+    [speedOnly.agent, speedOnly.model, speedOnly.label, speedOnly.tokPerSec, speedOnly.rows.length],
+    ['dsh', 'dsh-test-1', 'Dsh Test 1', 100, 0]
+  )
 })
 
 test('consent: only the refusal for want of approval counts', () => {
